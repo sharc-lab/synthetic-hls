@@ -1,3 +1,4 @@
+import random
 from dataclasses import dataclass, field
 from typing import Any, Union
 
@@ -36,3 +37,21 @@ def build_model_remote_openrouter(
 
 def normalize_model_name(model_name: str) -> str:
     return model_name.replace("/", "_").replace("-", "_").replace(" ", "_").lower()
+
+
+class ModelPool:
+    def __init__(self):
+        self.models = {}
+
+    def add_model(self, model: Model):
+        self.models[model.name] = model
+
+    def get_model(self, model_name: str) -> Model | None:
+        return self.models.get(model_name)
+
+    def remove_model(self, model_name: str):
+        self.models.pop(model_name, None)
+
+    def get_model_random(self, seed: int | None = None) -> Model:
+        r = random.Random(seed)
+        return r.choice(list(self.models.values()))
