@@ -88,6 +88,27 @@ class Design:
         return top_fn
 
     @property
+    def opt_fp(self) -> Path:    
+        fp = self.design_dir / "opt_template.tcl"
+        if not fp.exists():
+            return None
+        return fp
+
+    @property
+    def pareto_score_fp(self) -> Path:
+        fp = self.design_dir / "pareto_score.txt"
+        if not fp.exists():
+            return None
+        return fp
+
+    @property
+    def call_graph_fp(self) -> Path:
+        fp = self.design_dir / "call_grdaph.json"
+        if not fp.exists():
+            return None
+        return fp   
+
+    @property
     def toml_data(self) -> dict:
         return tomllib.loads((self.design_dir / "hls_eval_config.toml").read_text())
 
@@ -105,3 +126,8 @@ class Design:
             dst=dest,
         )
         return Design(dest, tags=self.tags)
+
+def find_design_dirs(start_dir) -> list[Path]:
+    all_dirs = [d for d in start_dir.rglob("*") if d.is_dir()]
+    design_dirs = [d for d in all_dirs if (d / "hls_eval_config.toml").exists()]
+    return design_dirs
