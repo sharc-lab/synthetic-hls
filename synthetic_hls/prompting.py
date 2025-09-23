@@ -159,7 +159,7 @@ def build_prompt_fix(
     """Build prompt for fixing design based on feedback."""
     p = PROMPT_PRE
     p += "\n\n"
-    if error_message == "OptDSL inconsistency error":
+    if error_message == "OptDSL error":
         p += PROMPT_GEN_OPTDSL_V2
         p += "\n\n"
         p += OUTPUT_FORMAT_OPTDSL
@@ -268,6 +268,6 @@ def build_prompt_mutate_target(design: Design, fix: bool = False, error_message:
             design.tb_file,
             design.call_graph_fp,
             design.opt_fp,
-            design.pareto_score_fp,
+            design.pareto_scores_fp,
             target=target,
         )

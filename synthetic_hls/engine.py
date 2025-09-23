@@ -1,4 +1,5 @@
 import json
+import shutil
 from pathlib import Path
 from joblib import Parallel, delayed
 from typing import List, Optional
@@ -46,21 +47,34 @@ class FeedbackDesignLoop:
         self.pools = pools
         self.fix = fix
 
-    def run(self, seed_design: Design, target: str, target_idx: int):
+    def run(self, seed_design: Design, target_list: list[str]):
         Parallel(n_jobs=4, backend="threading")(
-            delayed(self.run_single)(sample_idx, seed_design, target, target_idx) for sample_idx in range(self.n_samples)
+            delayed(self.run_single)(sample_idx, seed_design, target_list) for sample_idx in range(self.n_samples)
         )
 
-        root_dir = self.output_data_dir / f"{target_idx}_{target}" / seed_design.name
+        root_dir = self.output_data_dir / f"{'__'.join(target_list)}" / seed_design.name
+        seed_design_eval_data_fp = seed_design.design_dir / "single_eval_data.json"
+        seed_design_eval_data = json.loads(seed_design_eval_data_fp.read_text())
         all_summary = {
-            "target_label": target,
-            "seed_design_name": seed_design.name,
+            "target_label": target_list,
+            "model_name": self.model.name,
+            "seed_design": {
+                "Name": seed_design.name,
+                "Path": str(seed_design.design_dir),
+                "target_results": {
+                    **({"pareto_scores": seed_design_eval_data.get("opt_dsl_out", {}).get("pareto_scores", None),}
+                    if "pareto_scores" in target_list else {}),
+                    "num_functions": seed_design_eval_data.get("kernel_ast_out", {}).get("num_functions", None),
+                    "max_call_chain_depth": seed_design_eval_data.get("kernel_ast_out", {}).get("max_call_chain_depth", None),
+                    "average_function_lines": seed_design_eval_data.get("kernel_ast_out", {}).get("average_function_lines", None)
+                    }
+                },
             "samples": {}
         }
         # Summarize all feedback runs of each seed design
         for sample_idx in range(self.n_samples):
             s_entry = all_summary["samples"].setdefault(f"sample_{sample_idx}", {})
-            for iter in range(self.n_max_iterations):
+            for iter in range(len(target_list) * self.n_max_iterations):
                 iter_entry = s_entry.setdefault(f"iter_{iter}", {})
                 for ver in range(0, self.n_max_versions + 1):
                     ver_dir = root_dir / f"sample_{sample_idx}" / f"iter{iter}_v{ver}" 
@@ -69,19 +83,23 @@ class FeedbackDesignLoop:
                         ver_entry = iter_entry.setdefault(f"ver_{ver}", {"Path": str(ver_dir), "target_result": {}})
                         ver_entry["Path"] = str(ver_dir)
                         ver_eval_data = json.loads(ver_eval_data_fp.read_text())
-                        ver_entry["Status"] = ver_eval_data.get("status", "N/A")
-                        if target == "pareto_scores":
-                            ver_entry["target_result"]["pareto_scores"] = ver_eval_data.get("opt_dsl_out", {}).get("pareto_scores", "N/A")
+                        ver_entry["Status"] = ver_eval_data.get("status", None)
+                        if "pareto_scores" in target_list:
+                            ver_entry["target_result"]["pareto_scores"] = ver_eval_data.get("opt_dsl_out", {}).get("pareto_scores", None)
                         else:
-                            ver_entry["target_result"][target] = ver_eval_data.get("kernel_ast_out", {}).get(target, "N/A")
+                            ver_entry["target_result"]["num_functions"] = ver_eval_data.get("kernel_ast_out", {}).get("num_functions", None)
+                            ver_entry["target_result"]["max_call_chain_depth"] = ver_eval_data.get("kernel_ast_out", {}).get("max_call_chain_depth", None)
+                            ver_entry["target_result"]["average_function_lines"] = ver_eval_data.get("kernel_ast_out", {}).get("average_function_lines", None)
         (root_dir / "all_data_summary.json").write_text(json.dumps(all_summary, indent=4))
 
-    def run_single(self, sample_idx: int, seed_design: Design, target: str, target_idx: int):
+    def run_single(self, sample_idx: int, seed_design: Design, target_list: list[str]):
         design_to_improve = seed_design
-        sample_output_dir = self.output_data_dir / f"{target_idx}_{target}" / seed_design.name / f"sample_{sample_idx}"
+        sample_output_dir = self.output_data_dir / f"{'__'.join(target_list)}" / seed_design.name / f"sample_{sample_idx}"
         seed_name = seed_design.name
         sample_eval_data = {}
-        for iter in range(self.n_max_iterations):
+        target_plan = [target for target in target_list for i in range(self.n_max_iterations)]
+
+        for iter, target in enumerate(target_plan):
             sample_eval_data[f"iter_{iter}"] = {}
             max_ver_reached = False
             error_message = None
@@ -106,8 +124,11 @@ class FeedbackDesignLoop:
                         )
                     else:
                         design_to_improve = current_design
-                        if iter == self.n_max_iterations - 1:
-                            design_to_improve.copy_to(self.final_designs_dir / f"{target_idx}_{target}" / seed_design.name / f"{seed_design.name}_{sample_idx}")
+                        if iter == len(target_list) * self.n_max_iterations - 1:
+                            final_design_eval_data_fp = design_to_improve.design_dir.parent / "single_eval_data.json"
+                            final_design_dir = self.final_designs_dir / f"{'__'.join(target_list)}" / seed_design.name / f"{seed_design.name}_{sample_idx}"
+                            design_to_improve.copy_to(final_design_dir)
+                            shutil.copy(final_design_eval_data_fp, final_design_dir)
                         break
                 else:
                     if current_design is None:
@@ -126,7 +147,7 @@ class FeedbackDesignLoop:
                         output_design_data_dir=sample_output_dir / f"iter{iter}_v{ver}",
                         prompt=prompt,
                         design_id=f"{seed_name}_s{sample_idx}_iter{iter}_v{ver}",
-                        output_format="OPTDSL" if error_message == "OptDSL_Error" and self.fix else "FULL_CODE",
+                        output_format="OPTDSL" if error_message == "OptDSL Error" and self.fix else "FULL_CODE",
                         full_flow=True if target == "pareto_scores" else False,
                         seed_design=design_to_fix if self.fix else design_to_improve,
                     )
@@ -205,7 +226,10 @@ class SeedDesignGenerator:
             seed_design=None if reference_design is None else reference_design,
         )
         if error_message is None:
-            current_design.copy_to(self.seed_design_dir / "pass_designs" / seed_design_name)
+            pass_designs_dir = self.seed_design_dir / "pass_designs"
+            current_design.copy_to(pass_designs_dir / seed_design_name)
+            current_design_eval_data_fp = self.seed_design_dir / seed_design_name / "single_eval_data.json"
+            shutil.copy(current_design_eval_data_fp, pass_designs_dir / seed_design_name)
 
 
 class SyntheticHLSEngine:
@@ -256,7 +280,6 @@ class SyntheticHLSEngine:
         self.dir_final_designs = self.run_dir / "final_designs"
         self.dir_final_designs.mkdir()
 
-        self.model = model
         self.template_files_path = template_files_path
         self.vitis_hls_tool_csim = vitis_hls_tool_csim
         self.vitis_hls_tool_synth = vitis_hls_tool_synth
@@ -294,17 +317,34 @@ class SyntheticHLSEngine:
             pools=self.pools,
         )
         # Generate seed designs either from scratch or based on reference designs
-        if reference_designs is not None and len(reference_designs) > 0:
-            for reference_design in reference_designs:
-                seed_design_generator.run(reference_design=reference_design)
-        else:
-            seed_design_generator.run()
+        max_seed_gen_attempts = 5
+        seed_gen_attempt = 0
+        input_designs = []
+        while seed_gen_attempt < max_seed_gen_attempts:
+            if reference_designs is not None and len(reference_designs) > 0:
+                for reference_design in reference_designs:
+                    seed_design_generator.run(reference_design=reference_design)
+            else:
+                seed_design_generator.run()
 
-        seed_designs_dirs = find_design_dirs(self.dir_seed_designs / "pass_designs")
-        seed_designs = [
-            Design(d, name=d.name) for d in seed_designs_dirs
-        ]
-        input_designs = seed_designs
+            seed_designs_dirs = find_design_dirs(self.dir_seed_designs / "pass_designs")
+            seed_designs = [
+                Design(d, name=d.name) for d in seed_designs_dirs
+            ]
+            if len(seed_designs) >= 1:
+                input_designs = seed_designs
+                break
+            else:
+                if seed_gen_attempt < max_seed_gen_attempts - 1:
+                    print(f"Seed design generation attempt {seed_gen_attempt + 1} failed, retrying...")
+                else:
+                    raise ValueError("Seed design generation failed after maximum attempts.")
+                for d in self.dir_seed_designs.iterdir():
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+                    else:
+                        d.unlink(missing_ok=True)
+            seed_gen_attempt += 1
 
         # Run feedback design loop for each target
         feedback_design_loop = FeedbackDesignLoop(
@@ -319,12 +359,11 @@ class SyntheticHLSEngine:
             fix=fix,
         )
 
-        for target_idx, target in enumerate(target_list):
-            Parallel(n_jobs=4, backend="threading")(
-                delayed(feedback_design_loop.run)(input_design, target, target_idx) for input_design in input_designs
-            )
-            result_designs_dirs = find_design_dirs(self.dir_final_designs / f"{target_idx}_{target}")
-            result_designs = [
-                Design(d, name=d.name) for d in result_designs_dirs
-            ]
-            input_designs = result_designs
+        Parallel(n_jobs=4, backend="threading")(
+            delayed(feedback_design_loop.run)(input_design, target_list) for input_design in input_designs
+        )
+        result_designs_dirs = find_design_dirs(self.dir_final_designs / f"{'__'.join(target_list)}")
+        result_designs = [
+            Design(d, name=d.name) for d in result_designs_dirs
+        ]
+        input_designs = result_designs

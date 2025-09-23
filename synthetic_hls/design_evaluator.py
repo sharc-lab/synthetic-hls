@@ -184,6 +184,7 @@ class ASTAnalyzer:
     def to_json(self) -> None:
         out_path = self.output_dir / "call_graph.json"
         out_path.write_text(json.dumps(self._metrics, indent=2))
+        self.ast_json_path.unlink(missing_ok=True)
 
     # internal methods
     @staticmethod
@@ -275,7 +276,7 @@ class HLSFactoryFlow:
       2) Vitis HLS synthesis + implementation
       3) Vivado reporting
       4) Pareto scoring and summary export
-    Output a pareto_score.txt file and pareto_score_summary.json file with detailed metrics.
+    Output a pareto_scores.txt file and pareto_scores_summary.json file with detailed metrics.
     """
     def __init__(
         self,
@@ -283,11 +284,10 @@ class HLSFactoryFlow:
         work_dir: Path,
         n_random_samples: int = 64,
         random_sample_seed: int = 64,
-        n_jobs: int = 8,
+        n_jobs: int = 6,
     ):
         self.design_dir = design_dir
         self.dataset_dir = design_dir.parent
-        remove_and_make_new_dir_if_exists(work_dir)
         self.work_dir = work_dir
         self.vitis_hls_dir, self.vivado_dir = get_tool_paths(tool_paths_source=ToolPathsSource.ENVFILE)
         self.vitis_hls_bin = self.vitis_hls_dir / "bin" / "vitis_hls"
@@ -315,10 +315,11 @@ class HLSFactoryFlow:
 
         if pareto_df.empty or len(pareto_df) < 2:
             summary = {
-                "score": np.nan,
-                "n_pareto_frontier_points": int(len(pareto_df))
+                "pareto_score": None,
+                "n_points": int(len(df)),
+                "n_pareto_frontier_points": int(len(pareto_df)),
             }
-            return np.nan, summary
+            return None, summary
 
         pareto_df = pareto_df.copy()
         pareto_df[x_col] = (pareto_df[x_col] - df[x_col].min()) / (df[x_col].max() - df[x_col].min())
@@ -341,14 +342,14 @@ class HLSFactoryFlow:
         denominator = sum_d_ext + curve_length  # normalize against unit scale
         score = float(numerator / denominator)
         summary = {
-            "score": score,
+            "pareto_score": score,
             "n_points": int(len(df)),
             "n_pareto_frontier_points": int(len(pareto_df)),
             "resource_range": [float(df[x_col].min()), float(df[x_col].max())],
             "latency_range": [float(df[y_col].min()), float(df[y_col].max())],
             "start_point_to_corner": float(d_ext[0]),
             "end_point_corner": float(d_ext[1]),
-            "max_gap/curve_length": float(max_gap/curve_length) if curve_length > 0 else np.nan,
+            "max_gap/curve_length": float(max_gap/curve_length) if curve_length > 0 else None,
             "max_gap_points": (point1.tolist(), point2.tolist()),
         }
         return score, summary
@@ -379,7 +380,7 @@ class HLSFactoryFlow:
         }
 
         all_summary = {}
-        with open(design_dir / "pareto_score.txt", "a") as f:
+        with open(design_dir / "pareto_scores.txt", "a") as f:
             for resource_name, resource_column in resource_map.items():
                 pareto_delta_score, current_summary = self.delta_gap_based(
                     data_all, resource_column, "synthesis__latency_average_cycles"
@@ -387,12 +388,11 @@ class HLSFactoryFlow:
                 all_summary[f"{resource_name}_vs_latency"] = current_summary
                 f.write(f"pareto_score_{resource_name}_vs_latency = {pareto_delta_score}\n")
 
-        with open(design_dir / "pareto_score_summary.json", "w") as jf:
-            json.dump(all_summary, jf, indent=4)   
-            
-        shutil.copy(design_dir / "pareto_score.txt", design_generated_dir / "pareto_score.txt")
-        if self.work_dir.exists():
-            shutil.rmtree(self.work_dir)
+        with open(design_dir / "pareto_scores_summary.json", "w") as jf:
+            json.dump(all_summary, jf, indent=4)
+
+        # shutil.copy(design_dir / "pareto_scores.txt", design_generated_dir / "pareto_scores.txt")
+        shutil.copy(design_dir / "pareto_scores_summary.json", design_generated_dir / "pareto_scores_summary.json")
 
     def opt_dsl_check(self) -> bool:
         opt_template_fp = self.design_dir / "opt_template.tcl"
@@ -400,7 +400,7 @@ class HLSFactoryFlow:
         with open(opt_template_fp) as file:
             opt_dsl = OptDSL(file.read())
         
-        return opt_dsl.inconsistent_error
+        return opt_dsl.opt_dsl_error, opt_dsl.error_message
     
     def run(self):
         datasets: DesignDatasetCollection = {}
@@ -411,9 +411,8 @@ class HLSFactoryFlow:
             self.dataset_dir,
         ).copy_dataset(self.work_dir)
         datasets[dataset_name] = designs
-        p = datasets[dataset_name].dataset_dir / "kernel_ast.json"
-        p.unlink(missing_ok=True)
 
+        TIMEOUT_FRONTEND = 60.0 * 8
         opt_dsl_frontend = OptDSLFrontend(
             self.work_dir,
             random_sample=True,
@@ -429,6 +428,7 @@ class HLSFactoryFlow:
                 lambda x: f"{x}__post_frontend",
                 n_jobs=self.n_jobs,
                 cpu_affinity=list(range(self.n_jobs)),
+                timeout=TIMEOUT_FRONTEND,
             )
         )
         TIMEOUT_HLS_SYNTH = 60.0 * 32
@@ -481,6 +481,7 @@ class DesignEvaluator:
     """
     Generate designs using LLM, evaluate them using Vitis HLS toolflow, AST analyzer and HLSFactory flow.
     """
+    FULL_FLOW_LOCK = threading.Lock()
     def __init__(
         self,
         vitis_hls_tool_csim: VitisHLSCSimTool,
@@ -490,7 +491,6 @@ class DesignEvaluator:
         clang_path: Optional[Path] = None,
         include_paths: Optional[List[Path]] = None,
     ) -> None:
-        self.FULL_FLOW_LOCK = threading.Lock()
         self.cpp_compiler_tool = vitis_hls_tool_csim
         self.vitis_hls_tool = vitis_hls_tool_synth
         self.template_files_path = Path(template_files_path)
@@ -512,7 +512,7 @@ class DesignEvaluator:
         else:
             c = ""
             if prev_design_eval_data["opt_dsl_out"]["error"] is not None:
-                return ("OptDSL inconsistency error")
+                return ("OptDSL Error")
             if (
                 "timeout" in prev_design_syn_data
                 and prev_design_syn_data["timeout"] is True
@@ -646,6 +646,7 @@ class DesignEvaluator:
                         time.sleep(sleep_s)
                         continue
                     model_timeout = True
+                    print(f"[{eval_id}] Model call failed after {max_retries} attempts. Error: {e}")
                     t1 = time.monotonic()
                     dt = t1 - t_0
                     return None, None, None, model_timeout, prompt_too_long, t_0, t1, dt
@@ -653,6 +654,7 @@ class DesignEvaluator:
             t1 = time.monotonic()
             dt = t1 - t_0
             model_timeout = True
+            print(f"[{eval_id}] Model call failed after {max_retries} attempts.")
             return None, None, None, model_timeout, prompt_too_long, t_0, t1, dt  # treat as timeout
 
         future_llm = llm_pool.submit(call_model, prompt)
@@ -828,6 +830,7 @@ class DesignEvaluator:
 
             for f in design_generated_dir.glob("*.cpp"):
                 if not f.name.endswith("_tb.cpp"):
+                    print(f"[{eval_id}] Analyzing AST for kernel file: {f.name}...")
                     kernel_ast_analyzer = ASTAnalyzer(
                         source_code_path=f,
                         output_dir=design_generated_dir,
@@ -836,8 +839,10 @@ class DesignEvaluator:
                     )
                     kernel_ast_analyzer.analyze()
                     kernel_ast_analyzer.to_json()
+                    print(f"[{eval_id}] Saving AST analysis results to eval data...")
                     eval_data["kernel_ast_out"] = json.loads((design_generated_dir / "call_graph.json").read_text())
-
+                
+                                        
             current_design = Design(design_generated_dir, name=f"{eval_id}")
             output_design = current_design.copy_to(output_design_dir)
 
@@ -866,7 +871,8 @@ class DesignEvaluator:
             content = content.replace("[kernel_name]", kernel_name)
             hls_template.write_text(content)
 
-            work_dir = eval_dir_top / "raw_data" / eval_id
+            work_dir = eval_dir_top / "raw_data"
+            remove_and_make_new_dir_if_exists(work_dir)
             design_hlsfactory_flow = HLSFactoryFlow(
                 design_dir = output_design_dir,
                 work_dir = work_dir,
@@ -875,23 +881,27 @@ class DesignEvaluator:
                 n_jobs = 8,
             )
 
-            if design_hlsfactory_flow.opt_dsl_check():
-                print(f"[{eval_id}] Inconsistent factor lists detected!")
-                eval_data["opt_dsl_out"]["error"] = "OptDSL factor lists inconsistency error"
+            # Check OptDSL template files for errors
+            opt_dsl_error, opt_dsl_error_message = design_hlsfactory_flow.opt_dsl_check()
+            if opt_dsl_error:
+                print(f"[{eval_id}] OptDSL error found: {opt_dsl_error_message}")
+                eval_data["opt_dsl_out"]["error"] = opt_dsl_error_message
                 shutil.rmtree(output_design_dir.parent)
             else:
                 eval_data["status"] = "Pass"
                 if full_flow:
-                    with self.FULL_FLOW_LOCK:
+                    with DesignEvaluator.FULL_FLOW_LOCK:
+                        print(f"[{eval_id}] Running full HLSFactory flow...")
                         design_hlsfactory_flow.run()
                         design_hlsfactory_flow.analyze(
                             design_generated_dir=design_generated_dir,
                             design_dir=output_design_dir,
                             output_dir=eval_dir_top / "zip_data" / eval_id,
                         )
-                        pareto_scores_summary = json.loads((output_design_dir / "pareto_score_summary.json").read_text())
-                        eval_data["opt_dsl_out"]["pareto_scores"]["LUTs_vs_latency"] = pareto_scores_summary["LUTs_vs_latency"]["score"]
-                        eval_data["opt_dsl_out"]["pareto_scores"]["FFs_vs_latency"] = pareto_scores_summary["FFs_vs_latency"]["score"]
+                        print(f"[{eval_id}] Analyzing and saving pareto scores...")
+                        pareto_scores_summary = json.loads((output_design_dir / "pareto_scores_summary.json").read_text())
+                        eval_data["opt_dsl_out"]["pareto_scores"]["LUTs_vs_latency"] = pareto_scores_summary["LUTs_vs_latency"]["pareto_score"]
+                        eval_data["opt_dsl_out"]["pareto_scores"]["FFs_vs_latency"] = pareto_scores_summary["FFs_vs_latency"]["pareto_score"]
 
         self._serialize_eval_data(eval_id, eval_dir, eval_data)
         error_message = self._generate_error_message(eval_data)

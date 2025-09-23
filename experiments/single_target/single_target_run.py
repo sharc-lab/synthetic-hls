@@ -25,17 +25,20 @@ API_KEY_OPENROUTER = dotenv_values(".env")["OPENROUTER_API_KEY"]
 
 ### Setup Models ###
 
-MODEL_NAME = "deepseek/deepseek-chat-v3-0324"
+MODEL_NAME = "openai/gpt-oss-20b"
 
 model = build_model_remote_openrouter(MODEL_NAME, api_key=API_KEY_OPENROUTER)
 
 ### Run Main Stuff ###
 
-run_name = f"run__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+# Available Targets now(Working on including others): "num_functions", "max_call_chain_depth", "average_function_lines", "pareto_scores"
+target = "max_call_chain_depth"
+run_name = f"run__{target}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
+print(f"Run Name: {run_name}, Target: {target}, Model: {MODEL_NAME}")
 
 engine = SyntheticHLSEngine(
     run_name=run_name,
-    dir_workspace=DIR_WORKSPACE,
+    dir_workspace=DIR_WORKSPACE / MODEL_NAME.split("/")[1],
     template_files_path=DIR_TEMPLATE_FILES,
     vitis_hls_tool_csim=VitisHLSCSimTool(vitis_hls_dir),
     vitis_hls_tool_synth=VitisHLSSynthTool(vitis_hls_dir),
@@ -45,12 +48,11 @@ engine = SyntheticHLSEngine(
     include_paths=INCLUDE_PATHS
 )
 
-# Available Targets now(Working on including others): "num_functions","max_call_chain_depth","pareto_scores"
 engine.run(
-    target_list=["num_functions"],
-    n_seed_designs=8,
-    n_samples=3,
-    n_feedback_iterations=3,
+    target_list=[target],
+    n_seed_designs=12,
+    n_samples=4,
+    n_feedback_iterations=5,
     n_max_versions=8,
-    fix=True,   
+    fix=True
 )

@@ -95,8 +95,8 @@ class Design:
         return fp
 
     @property
-    def pareto_score_fp(self) -> Path:
-        fp = self.design_dir / "pareto_score.txt"
+    def pareto_scores_fp(self) -> Path:
+        fp = self.design_dir / "pareto_scores_summary.json"
         if not fp.exists():
             return None
         return fp

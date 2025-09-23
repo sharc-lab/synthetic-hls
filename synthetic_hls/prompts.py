@@ -19,8 +19,11 @@ The design should exhibit a rich and diverse performance-resource tradeoff space
 - It should be sensitive to HLS directives (i.e. `pipeline`, `unroll`, `array_partition`, etc.) in ways that yield a wide range of implementations with varying resource usage and latency.
 - The generated design space should contain datapoints that span from low-resource/high-latency to high-resource/low-latency implementations, allowing for a meaningful Pareto frontier to be constructed.
 - Avoid overly rigid or bottlenecked structures that limit the impact of directive combinations.
+Latency sensitivity requirement: The design must show material latency variation across explored points (i.e. `max(latency)/min(latency) >= 1.5` and `latency_range = max-min >= 10%` of `max`). 
+- If this is not met, redesign to remove bottlenecks:
+    Bottleneck audit (design-time): Identify the loop(s)/stage(s) that dominate cycles and explain how `pipeline II`, `unroll`, memory parallelism (`array_partition`/tiling), and optional work paths will change the critical path cycles.
 """
-).strip()   
+).strip()
 
 
 PROMPT_GENERAL_CONSTRAINTS = dedent(
@@ -161,15 +164,33 @@ The generated `opt_template.tcl` file should:
 
 COMPLEXITY_TARGETS: Dict[str, str] = {
     "max_call_chain_depth": dedent("""
-        Increase exactly ONE complexity dimension: maximum call-chain depth.
-        Target: increase `max_call_chain_depth` by ≥ 1 using meaningful intermediate subfunctions (not wrappers), while keeping the top-level kernel interface unchanged.
-        - Increases in depth must reflect real intermediate computation or orchestration, not wrapper chains.
+        Increase this complexity dimension: maximum call-chain depth.
+        Target: increase `max_call_chain_depth` by >= 1 while maintaining or increasing `average_function_lines` (from `call_graph.json`).
+        - Any added depth must result from meaningful intermediate subfunctions performing real computation/control (no wrappers).
+        - Substance guard: every new/modified function should have LOC >= baseline `average_function_lines` and add non-trivial logic (loops, transformations, branching, or orchestration with in-between logic).
+        - No filler: do not add meaningless lines, redundant code, or micro-splits that only inflate counts.
+        - Keep the top-level kernel interface unchanged.
     """).strip(),
 
     "num_functions": dedent("""
-        Increase exactly ONE complexity dimension: number of functions.
-        Target: add ≥ 2 new meaningful subfunctions (not wrappers), refactor logic into helper modules, and keep the top-level kernel interface unchanged.
-        - Increases in function count must not reduce average function substance (avoid micro-splitting).
+        Increase this complexity dimension: number of functions.
+        Target: add >= 2 meaningful subfunctions while maintaining or increasing `average_function_lines` (from `call_graph.json`).
+        - Substance guard: each new function must have LOC >= baseline `average_function_lines` and encapsulate real computation, data movement, or control.
+        - No filler: avoid wrappers, redundant lines, or trivial splits that reduce substance or only inflate counts.
+        - Keep the top-level kernel interface unchanged.
+    """).strip(),
+
+    "average_function_lines": dedent("""
+        Increase this complexity dimension: average function lines.
+        Target: increase `average_function_lines` (from `call_graph.json`) by >= 0.2 relative to the current baseline
+                (or by >= 5 LOC if the baseline < 25), without reducing synthesizability.
+        - Strategy (substantive ways to add LOC):
+          - Add meaningful computation blocks: tiled inner loops, reductions, windowed/stencil ops, prefix/suffix transforms.
+          - Introduce mid-level orchestration: explicit buffer staging, boundary handling, loop-carried state, or reduction trees.
+          - Replace opaque one-liners with explicit staged steps and intermediate values that HLS can analyze.
+        - Substance guard: every modified function must include at least one non-trivial element (loop, branch, reduction,
+          data reorganization) and should meet or exceed the baseline `average_function_lines`.
+        - No filler: avoid dead code, no-op variables, redundant copies, excessive parameter padding, or comment-only inflation.
     """).strip(),
 }
 
@@ -207,6 +228,7 @@ Your task is to:
 - The functionality and algorithm of your benchmark must be unique and created from scratch.
 - If multiple benchmarks are requested, each must represent a different design concept and algorithmic structure. Avoid duplicating the same kernel logic across samples.
 - The total size of the design must be moderate and practical for synthesis. Avoid extremely large loop bounds, excessive buffer sizes, or deeply nested control that could cause long compile times or unrealistic synthesis results. Typically, loop bounds should be smaller than 128.
+- Anti-stall rule: Do not create a single outer loop that is always `pipeline II=1` with trivial inner work; such structures pin latency. Balance work across stages so changing `unroll`/`II` actually moves total cycles.
 
 ### Structural Requirements for the Benchmark Design:
 - You must build a full, multi-stage application accelerator, not just a reusable module. It should involve multiple sub-functions or kernels, realistic data access and compute dependencies, and ideally feature both compute-intensive and logic-driven stages.
@@ -332,7 +354,7 @@ After fixing the code, regenerate the updated OptDSLv2 optimization template fil
 
 PROMPT_GEN_AST_FEEDBACK_WITH_OPT = dedent(
     f"""
-You are provided with a previously generated HLS benchmark, including:
+You are provided with a previously generated HLS design, including:
 - A C++ kernel implementation file describing a synthesizable, modular application-level accelerator.
 - A matching C++ header file, testbench, top-level function name, markdown description, and OptDSLv2 optimization file.
 - A `call_graph.json` that summarizes current function hierarchy and calls:
@@ -342,60 +364,82 @@ You are provided with a previously generated HLS benchmark, including:
     - `functions` (list[str]): names of functions present in the current design.
     - `kernel_total_lines` (int): total lines of code in the kernel.
     - `function_line_counts` (dict[str, int]): per-function lines of code (LOC) measured from the AST.
-    - `average_function_lines` (float): mean LOC across functions.
+    - `average_function_lines` (float): mean LOC across functions. Treat this as a primary, quantitative complexity KPI; the redesign must keep or improve it.
     - `edges` (list[{{"caller": str, "callee": str}}]): directed edges; each means `caller()` invokes `callee()`.
-    Use these to assess function substance and avoid trivial splits.
-    Use this to decide where to 
-    (1) add cohesive subfunctions to increase function count and/or
-    (2) refactor existing functions to introduce meaningful intermediate calls (i.e. have functions call other new or existing functions) to increase the maximum call-chain depth. 
-    - Do not create artificial wrappers or pass-through stubs. 
-    - Any added or modified function must encapsulate real computation, data movement, or control decisions and preserve synthesizability.
-    - Treat the call graph as a scaffold: you may increase function count by introducing new cohesive stages, and you may increase depth by modifying function bodies to orchestrate calls to other non-trivial functions that implement meaningful sub-steps (not mere forwarding).
 
 Your task is to:
-1. Redesign and regenerate the given benchmark to enhance its complexity along the following single target dimension; you may adjust other dimensions if necessary, but you must measurably improve the target dimension and preserve function substance:
+1. You must meaningfully redesign and improve kernel complexity (structure, content, logic) along this single target dimension:
 $complexity_target
-2. Preserve its well-scalable directive sensitivity and overall synthesis compatibility, while expanding it meaningfully along the chosen dimension.
-3. Fix or refine any unclear, redundant, trivial, or potentially invalid code and design structures if present in the input files.
-4. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel description, OptDSLv2) reflecting the improved design.
-5. Write a hls_eval_config.toml file tagging the design with:
+while not regressing the other complexity metrics from `call_graph.json`. Specifically, when you improve one target, you must at least keep the other metrics like `num_functions`, `max_call_chain_depth`, `average_function_lines` etc. (use the provided JSON as the baseline)
+- All improvements must be substantive and practically justified. No wrappers or cosmetic edits.
+- Workflow compliance is MANDATORY: All redesign and code generation must adhere to the Design-first workflow below. Deviation is considered incorrect.
+2. Fix or refine any unclear, redundant, trivial, or potentially invalid code and design structures if present in the input files.
+3. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel_description.md, OptDSLv2) reflecting the improved design.
+4. Write a hls_eval_config.toml file tagging the design with:
     - `tags = ["llm_gen"]`
 
-### Critical Constraint:
-- Only include comments in the generated C++ code and `opt_template.tcl` where they are essential for understanding complex behavior or assumptions. Avoid excessive, obvious, or redundant comments. Keep all code and directives clean and focused.
-- You must ensure that the redesigned benchmark remains fully synthesizable by Vitis HLS.  
-- All syntax, memory usage, control structures, and function constructs must comply with Vitis HLS compatibility. Designs that fail synthesis due to invalid constructs are not acceptable.
+## Design-first workflow (MANDATORY)
+### Step 1 - Read & revise the functional spec (Design-first, MANDATORY)
+1. Carefully read the existing `kernel_description.md` to understand the current functionality, data model, pipeline, and constraints.  
+2. Produce a Revised Kernel Description (R-KD) that refines and, where helpful, expands or rewrites the kernel's functionality within the same application domain to enable meaningful complexity growth while staying realistic for HLS.
 
-### What "well-scalable" means:
-The design should exhibit a rich and diverse performance-resource tradeoff space when synthesized under different pragma configurations. Specifically:
-- It should be sensitive to HLS directives (i.e. `pipeline`, `unroll`, `array_partition`, etc.) in ways that yield a wide range of implementations with varying resource usage and latency.
-- The generated design space should contain datapoints that span from low-resource/high-latency to high-resource/low-latency implementations, allowing for a meaningful Pareto frontier to be constructed.
-- Avoid overly rigid or bottlenecked structures that limit the impact of directive combinations.
+The R-KD must include:
+- **Goals & Target:** What you will change to improve `$complexity_target` and how you will keep or raise the other complexity metrics (i.e. `num_functions`, `max_call_chain_depth`, `average_function_lines`).
+- **Functional Overview:** Clear end-to-end behavior and any functional extensions/refinements you introduce (brief rationale).
+- **Dataflow & Staging:** Phases, fixed-size buffers/tiling, branching/reduction steps, and inter-stage interactions.
+- **Function Inventory (proposed):** List of functions/modules with roles and non-trivial estimated logic (loops/branches). Avoid micro-splits; each function must perform substantive work.
+- **Control/Datapath Structure:** Orchestration logic explaining how deeper call chains or larger function sets arise meaningfully.
+- **Directive Sensitivity Plan:** Where/why `pipeline`, `unroll`, `array_partition`, etc., will induce a rich tradeoff space.
+- **Interface & I/O Plan:** You may change the top-level interface and I/O semantics
+  (number/order of ports, data types/bit-widths, shapes, streaming vs memory)
+  to enable a better design, provided that:
+    - All sizes are compile-time constants (no dynamic allocation).
+    - The interface is HLS-compatible (i.e. static arrays, `hls::stream`, `ap_int`).
+    - `top.txt`, header, and testbench are updated consistently
+    - You include an I/O Migration Map detailing old→new mapping, rationale, and required test updates.
+- **Synthesis Constraints:** Static loop bounds; no recursion or dynamic allocation; full Vitis HLS compatibility.
+- **Practicality Justification:** For each added/modified function or structure, briefly state the practical benefit (i.e. improves locality/reuse, exposes tunable II/unroll, enables tiling), and indicate how it is expected to improve the target and kernel complexity.
 
-### Redesign Instructions:
-- Build upon the previous kernel as a foundation. Keep useful structures, reuse well-designed modules, and primarily expand along the targeted dimension. 
-- Use `call_graph.json` to target hierarchy: deepen existing chains by modifying/refactoring function bodies to introduce meaningful internal calls to other substantive functions, split large stages into coherent sub-stages, and/or add cohesive helper functions that implement real computation or control (no wrappers).
-- Preserve the top-level API and overall pipeline intent; do not blindly inflate unrelated dimensions.
-- Do not simply insert dummy code. All additions must be coherent, functional, and realistic for HLS-based synthesis.
-- Ensure the new design adheres to constraints for synthesis feasibility, while being non-trivial and multi-phase.
-- Post-redesign, the source must clearly reflect the chosen single-dimension increase (i.e. `max_call_chain_depth` increases by ≥ 1, or `num_functions` increases by ≥ 2) and maintain function substance:
-  - No trivial splitting: Avoid creating micro-functions with negligible logic.
-  - Use `function_line_counts` and `average_function_lines` as guards: the new `average_function_lines` should be maintained or increased relative to the baseline; each new function should have LOC ≥ `(average_function_lines of the given benchmark)` and satisfy the Non-Triviality Gate below.
-- When increasing lines or adding submodules, expand algorithmic content (i.e. multi-step transforms, buffering/tiling, deterministic staging, meaningful branching), not just wrappers or parameter pass-throughs.
-- Non-Triviality Gate for any new or split function (must satisfy at least one):
-  - Implements a distinct algorithmic sub-stage (i.e. multi-step transform, windowed/filtering pass, reduction/aggregation) with static loop bounds; or
-  - Contains substantive control or dataflow (i.e. at least one meaningful loop and/or branching that affects results); or
-  - Orchestrates ≥ 2 non-trivial subcalls while performing in-between logic (buffering, indexing, combining partial results).
-  Functions that merely forward parameters, rename variables, wrap a single call, or split an expression without adding algorithmic structure are not allowed.
-- Encouraged complexity increases inside existing functions: introduce structured tiling/phasing, fixed-size buffering, deterministic staging, or controlled branching that changes the call graph meaningfully, while keeping loops statically bounded and HLS-synthesizable.
+The R-KD is the ground truth. Generate code only after finalizing the R-KD, and ensure the implementation faithfully matches it.
+The final R-KD must be saved as `kernel_description.md`. Do not emit alternative filenames.
 
-### Structural Requirements for the Benchmark Redesign:
+### Step 2 - Implement the revised design
+Use the R-KD to regenerate all artifacts:
+- Updated `kernel_description.md` reflecting your revised functionality.
+- Kernel `.cpp`, header `.h`, testbench, `top.txt`, and OptDSLv2 file.
+- Begin Step 2 only after Step 1 is complete. Implement the R-KD faithfully; if you must deviate, update the R-KD first and then proceed. Do not "add code in place" without the spec reflecting it.
+
+
+## Substance/complexity rules:
+- Increase the requested target meaningfully.
+- Cross-metric non-regression: Regardless of target, do not reduce the other metrics from their baseline values in `call_graph.json`; increasing them is preferred.
+- Each new function should have LOC >= baseline `average_function_lines`.
+- No artificial LOC inflation: Do not increase `average_function_lines` via comments, whitespace, dead code, no-ops, or superficial scaffolding. Line growth must come from real computation/control.
+    - **Explicit no-op ban:** No statements like `a = a + 0`, `x *= 1`, `y = y | 0`, dummy branches that always execute the same path, or dead stores/reads added only to raise LOC.
+    - **Wrapper ban:** Do not add pass-through functions whose sole purpose is to call another function without in-between logic (buffering, indexing transforms, boundary handling, reduction staging, etc.).
+    - **Meaningful structure only:** Added loops/branches must change dataflow, reuse, or timing (i.e. tiling for locality, partial partition for bandwidth, staged reductions) and be verifiable by changed HLS metrics for at least one OptDSL configuration.
+- Non-Triviality Gate (new/split functions must satisfy >= 1):
+    - Implements a distinct algorithmic sub-stage (i.e. multi-step transform, reduction/aggregation, windowed pass) with static bounds, or
+    - Contains substantive control or dataflow (meaningful loop/branch that affects results), or
+    - Orchestrates >= 2 non-trivial subcalls and performs in-between logic (buffering/indexing/combining).
+- Encourage deep, meaningful structure: tiling/phasing, fixed-size buffering, staged transforms, deterministic branching; no superficial layering.
+
+## Structural Requirements for the Benchmark Redesign:
 - The design should be non-trivial, meaning it includes both compute-heavy operations and non-trivial data dependencies. The complexity should allow rich exploration under HLS directive tuning.
 - The kernel must process structured data, contain multiple computation layers or phases, and represent a self-contained functional pipeline.
 - All loops must have static bounds analyzable by synthesis tools. Avoid dynamic memory, recursion, or unbounded loops.
 - All `for` loops in the kernel must be clearly labeled using the syntax `<label>: for (...)`, where the label is unique and descriptive. Do not leave any loop unlabeled.
 - The header must declare all interfaces and top-level functions clearly.
 - The testbench must initialize inputs, invoke the top-level function, and validate outputs with representative test cases.
+
+## Critical Constraints:
+- Only include comments in the generated C++ code and `opt_template.tcl` where they are essential for understanding complex behavior or assumptions. Avoid excessive, obvious, or redundant comments. Keep all code and directives clean and focused.
+- You must ensure that the redesigned benchmark remains fully synthesizable by Vitis HLS.  
+- All syntax, memory usage, control structures, and function constructs must comply with Vitis HLS compatibility. Designs that fail synthesis due to invalid constructs are not acceptable.
+- Every change must add real algorithmic/architectural value (see Complexity principles above).
+- Workflow compliance is mandatory: Skipping Step 1, mixing spec and code, or emitting code before the R-KD section is considered invalid output.
+- Complexity KPI: Treat `average_function_lines` as a direct complexity measure to be kept or improved; any increase must result from meaningful algorithmic content, not padding.
+
 
 {PROMPT_OPTDSL_V2_REQUIREMENTS}
 
@@ -405,28 +449,39 @@ The design should exhibit a rich and diverse performance-resource tradeoff space
 
 
 PROMPT_GEN_SCORE_FEEDBACK_WITH_OPT = dedent(
-    f"""
+f"""
 You are provided with:
-- A previously generated HLS benchmark, including:
-  - A C++ kernel implementation file describing a synthesizable, modular application-level accelerator.
-  - A matching C++ header file, testbench, top-level function name, markdown description, and OptDSLv2 optimization file.
-- A `pareto_score.txt` file containing two scalar metrics that quantify the scalability of the benchmark. Each metric is of the form:
-    - `pareto_score_LUTs_vs_latency = <float>`
-    - `pareto_score_FFs_vs_latency = <float>`
-    These reflect how effectively the benchmark spans a tradeoff frontier between resource usage (LUTs, FFs) and performance (latency). 
-    Numerically smaller/lower scores indicate better scalability.
+- A previously generated HLS benchmark, including kernel (.cpp), header (.h), testbench, top function name (top.txt), markdown description, and an OptDSLv2 optimization file (opt_template.tcl).
+- A JSON feedback report named `pareto_scores_summary.json` (authoritative), which contains detailed Pareto analysis for LUTs-vs-latency and FFs-vs-latency:
+  {{
+    "LUTs_vs_latency": {{
+      "pareto_score": <float or null>, may be null (None) if the Pareto frontier has < 2 points
+      "n_points": <int>,
+      "n_pareto_frontier_points": <int>,
+      "resource_range": [min, max],
+      "latency_range": [min, max],
+      "start_point_to_corner": <float>,
+      "end_point_corner": <float>,
+      "max_gap/curve_length": <float>,
+      "max_gap_points": [[r1,l1], [r2,l2]]
+    }},
+    "FFs_vs_latency": {{ ... same fields ... }}
+  }}
 
-Your goal is to update the design with better scalability, so that both Pareto scores in the new design are numerically lower than those in the provided pareto_score.txt (e.g, if the original score is 0.52, the new score should be < 0.52), ideally approaching or below 0.35.
+Goal:
+Redesign and regenerate the benchmark so that BOTH Pareto scores in `pareto_scores_summary.json` become numerically LOWER than before (e.g., if 0.52, target < 0.52; ideally ≤ 0.35), while keeping the design fully synthesizable in Vitis HLS.
+- Use ONLY `pareto_scores_summary.json` for quantitative guidance. If any other score files exist (e.g., `pareto_scores.txt`), ignore them.
 
-Your task is to:
-1. Redesign and regenerate the given benchmark so that it achieves numerically lower/smaller Pareto scores than those in the provided `pareto_score.txt`, for both LUTs vs. latency and FFs vs. latency.
-2. Preserve synthesis compatibility and ensure that the design remains fully functional and synthesizable in Vitis HLS.
-3. Fix any issues that limit scalability, such as:
-   - Overly rigid structures that reduce sensitivity to `pipeline`, `unroll`, or `partition` directives.
-   - Design bottlenecks that prevent latency-resource tradeoff variations.
-4. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel description, OptDSLv2) reflecting the improved scalability.
-5. Write a hls_eval_config.toml file tagging the design with:
-    - `tags = ["llm_gen"]`
+Your tasks:
+1. Improve scalability so both reported scores in the next `pareto_scores_summary.json` decrease.
+2. Maintain functional correctness and synthesizability.
+3. Address the specific issues implied by `pareto_scores_summary.json`:
+   - If `n_pareto_frontier_points` is small (< 10) → enrich design space to create more tradeoff points.
+   - If `max_gap/curve_length` is large (> 0.2)→ reduce large gaps so the frontier is smoother.
+   - If `resource_range` or `latency_range` is narrow → widen tunability via loop tiling/unrolling/partitioning and pipeline placement.
+   - If `start_point_to_corner` or `end_point_corner` is large (> 0.2) → push the frontier closer to ideal corners (low-lat/low-res and vice versa).
+4. Regenerate ALL files (kernel, header, testbench, top.txt, kernel description, OptDSLv2).
+5. Write `hls_eval_config.toml` with: tags = ["llm_gen"].
 
 {PROMPT_SCALABILITY_EXPLANATION}
 
@@ -434,27 +489,17 @@ Your task is to:
 Scalability is quantitatively evaluated using Pareto scores, which measure how effectively a benchmark design spans the tradeoff space between performance (latency) and hardware resource usage LUTs or FFs). 
 Each score is computed from 64 synthesized design points generated using the corresponding opt_template.tcl file.
 Numerically lower Pareto scores are better, indicating that the design supports a wide range of tunable tradeoffs and yields a smooth, continuous Pareto frontier.
+- The Pareto score is computed using:
+    pareto_score = ((start_point_to_corner + end_point_corner) + max_gap) / ((start_point_to_corner + end_point_corner) + curve_length)
 - A score below 0.35 is considered excellent, reflecting strong directive sensitivity and a well-balanced optimization space.
 - A score above 0.6 typically suggests poor scalability either due to rigid structures, design bottlenecks, or weak responsiveness to directive tuning.
-- The Pareto score is computed using:
-    pareto_score = (distance_to_corners + max_gap) / (distance_to_corners + total_curve_length)
-    Where:
-    - distance_to_corners = how close the Pareto frontier reaches the ideal tradeoff corners (low latency / low resource).
-    - max_gap = the largest gap between neighboring Pareto-optimal points.
-    - total_curve_length = total length of the frontier curve (to normalize for scale).
-Goal: Ensure both LUTs-vs-latency and FFs-vs-latency Pareto scores in the updated design are numerically lower than in the original design.
 
-#### Guidance for Benchmark Redesign:
-Use the provided reference benchmark and its associated scores as a guide:
-- Your updated benchmark should aim to be longer, more comprehensive, and structurally richer than the reference benchmark wherever possible.
-- Study which structures, memory organizations, and loop hierarchies lead to lower Pareto scores.
-- Redesign your new benchmark to match or surpass the scalability and architectural diversity of the reference, aiming for comparable or smaller Pareto scores on both LUTs vs. latency and FFs vs. latency.
-- Analyze patterns in the reference `opt_template.tcl` files and design stage breakdowns to guide your own benchmark decomposition.
-
-### Redesign Instructions for Lower Pareto Scores:
-- Increase the number of design points lying on the Pareto frontier.
-- Reduce large gaps in the frontier by ensuring directive variations produce incremental performance/resource tradeoffs.
-- Adjust loop structures, array partitions, and pipelining opportunities to improve directive sensitivity without breaking functionality.
+### Redesign Guidance (tie your edits to `pareto_score_summary.json`)
+If score is None → must prioritize generating valid points(n_pareto_frontier_points) first before minimizing the score.
+- Increase frontier coverage and density (more points on the Pareto frontier).
+- Smooth the frontier (reduce `max_gap/curve_length`).
+- Improve directive sensitivity (loop labels, partitioned arrays, controlled pipelining/unrolling).
+- Keep loops statically bounded and the design modular and non-trivial
 
 ### Structural Requirements for the Benchmark Redesign:
 - The updated design should be non-trivial, meaning it includes both compute-heavy operations and non-trivial data dependencies. The complexity should allow rich exploration under HLS directive tuning.
