@@ -43,6 +43,7 @@ PROMPT_GENERAL_CONSTRAINTS = dedent(
 - You must ensure the design is synthesizable, well-scalable, and modular, supporting clean hierarchy, sub-functions, templates, or structs where appropriate.
 - DO NOT add any performance optimization pragmas such as `pipeline`, `unroll`, `array_partition`, `inline`, or similar in the kernel implementation file. The only pragma you are allowed to use is `#pragma HLS top name=...` to define the kernel top function.
 - Ensure the total design space defined by OptDSLv2 optimization template file includes a rich spread of latency vs. resource trade-offs.
+- The kernel description file must be saved as `kernel_description.md`. The toml file must be saved as `hls_eval_config.toml`. Do not emit alternative filenames.
 - Do not omit any part. Do not output anything other than the required seven complete code files.
     """
 ).strip()
@@ -61,6 +62,12 @@ You must follow the format, directive structure, and example configurations exac
 - Do NOT omit any bracket or comma. This is required syntax.
     - Correct: `partition("array_name", "kernel", "cyclic", [1, 2, 4, 8], 1, "group_name")`
     - Incorrect: `partition "array_name" "kernel" "cyclic" [1, 2, 4, 8] 1 "group_name"` or `partition("array_name", "kernel", "cyclic", 1 2 4 8, 1, "group_name")`
+- Commenting rule: Inline/end-of-line comments on the same line as a directive are not allowed. Comments must be on their own line.
+    - Correct:  
+      `# optional pipeline for outer loop`  
+      `pipeline("loop1", "func1", optional=True)`
+    - Incorrect:
+      `pipeline("loop1", "func1")  # comment not allowed on same line`
 
 #### OptDSLv2 Semantics:
 - This format uses a Python-like DSL to describe directive configurations for:
@@ -69,6 +76,22 @@ You must follow the format, directive structure, and example configurations exac
     - `partition(array_var: str, function: str, partition_type: str, factor: list[int], dim: int, group: str | None = None)`
         - DO NOT use dimension index 0 in any `partition()` directive. Vivado HLS indexing starts from 1, and `dim=0` is invalid. 
         - The `partition_type` is fixed as `cyclic` for all partitions.
+
+#### How configurations are counted (design-space size math)
+- For each group (zip-block), count how many factors it has. Multiply all those counts together.
+- For each ungrouped directive, count how many factors it has. Multiply all those counts in.
+- For each optional pipeline, multiply by 2 (on/off).
+```
+Total variants =
+  (group1_factors_count * group2_factors_count * ... )
+* (ungrouped_factors_count_1 * ungrouped_factors_count_2 * ... )
+* (2 ^ number_of_optional_pipelines)
+  (Assumes other static directives don't change variant count.)
+```
+- Example: Two groups `group_1` with factors `[1,2,4,8]` and `group_2` with factors `[1,2]` → 4 * 2;  
+  two ungrouped directives with `[1,2,4]` and `[1,2]` → *3 *2;  
+  one optional pipeline → *2.  
+  TOTAL = 4 * 2 * 3 * 2 * 2 = 96 variants.
 
 #### OptDSL Output Requirements:
 1. Resource Directives
@@ -155,8 +178,9 @@ The generated `opt_template.tcl` file should:
 - DO NOT apply multiple directives of the same kind (i.e. two `pipeline()` calls with and without `optional=True`, or two `partition()` directives with different factors) to the same loop or array.
 - Match all loop labels and array names exactly as used in the kernel code.
 - Ensure the design space has a balanced spread of performance vs. resource trade-offs.
-- Ensure the consistancy of factor lists across directives in the same group.
-- Keep the total number of configurations but diverse enough for performance-resource tradeoff analysis. The total number of distinct directive combinations produced from the OptDSLv2 template file should exceed 64 but be less than 256. Choose the number of blocks and factors accordingly.
+- Ensure the consistency of factor lists across directives in the same group.
+- Keep the total number of configurations within bounds for tractable exploration:  
+  64 ≤ TOTAL < 4096 using the counting rules above. If your estimated TOTAL exceeds 4096, reduce factor-list lengths, the number of ungrouped directives, or the number of `optional=True` pipelines. If below 64, add an ungrouped knob or extend a factor list.
 
     """
 ).strip()
@@ -174,7 +198,7 @@ COMPLEXITY_TARGETS: Dict[str, str] = {
 
     "num_functions": dedent("""
         Increase this complexity dimension: number of functions.
-        Target: add >= 2 meaningful subfunctions while maintaining or increasing `average_function_lines` (from `call_graph.json`).
+        Target: add >= 1 meaningful subfunctions while maintaining or increasing `average_function_lines` (from `call_graph.json`).
         - Substance guard: each new function must have LOC >= baseline `average_function_lines` and encapsulate real computation, data movement, or control.
         - No filler: avoid wrappers, redundant lines, or trivial splits that reduce substance or only inflate counts.
         - Keep the top-level kernel interface unchanged.
@@ -182,8 +206,8 @@ COMPLEXITY_TARGETS: Dict[str, str] = {
 
     "average_function_lines": dedent("""
         Increase this complexity dimension: average function lines.
-        Target: increase `average_function_lines` (from `call_graph.json`) by >= 0.2 relative to the current baseline
-                (or by >= 5 LOC if the baseline < 25), without reducing synthesizability.
+        Target: increase `average_function_lines` (from `call_graph.json`) by >= 0.1 relative to the current baseline
+                (or by >= 2 LOC if the baseline < 20), without reducing synthesizability.
         - Strategy (substantive ways to add LOC):
           - Add meaningful computation blocks: tiled inner loops, reductions, windowed/stencil ops, prefix/suffix transforms.
           - Introduce mid-level orchestration: explicit buffer staging, boundary handling, loop-carried state, or reduction trees.
@@ -467,39 +491,64 @@ You are provided with:
     }},
     "FFs_vs_latency": {{ ... same fields ... }}
   }}
+- A `call_graph.json` summarizing current structural complexity (baseline to protect during redesign):
+  - `num_functions` (int), `max_call_chain_depth` (int), `functions` (list[str])
+  - `kernel_total_lines` (int), `function_line_counts` (dict[str,int])
+  - `average_function_lines` (float): treat as a direct, quantitative complexity KPI
+  - `edges` (list of {{caller, callee}}) for the call graph
 
 Goal:
 Redesign and regenerate the benchmark so that BOTH Pareto scores in `pareto_scores_summary.json` become numerically LOWER than before (e.g., if 0.52, target < 0.52; ideally ≤ 0.35), while keeping the design fully synthesizable in Vitis HLS.
 - Use ONLY `pareto_scores_summary.json` for quantitative guidance. If any other score files exist (e.g., `pareto_scores.txt`), ignore them.
+Co-objective on structural complexity: do not regress the `average_function_lines` metric from `call_graph.json`; maintaining or increasing it via meaningful algorithmic content is preferred. 
+- Likewise, avoid regressions in `num_functions` and `max_call_chain_depth` unless you provide a clear rationale tied to improved scalability.
 
-Your tasks:
-1. Improve scalability so both reported scores in the next `pareto_scores_summary.json` decrease.
-2. Maintain functional correctness and synthesizability.
-3. Address the specific issues implied by `pareto_scores_summary.json`:
-   - If `n_pareto_frontier_points` is small (< 10) → enrich design space to create more tradeoff points.
-   - If `max_gap/curve_length` is large (> 0.2)→ reduce large gaps so the frontier is smoother.
-   - If `resource_range` or `latency_range` is narrow → widen tunability via loop tiling/unrolling/partitioning and pipeline placement.
-   - If `start_point_to_corner` or `end_point_corner` is large (> 0.2) → push the frontier closer to ideal corners (low-lat/low-res and vice versa).
-4. Regenerate ALL files (kernel, header, testbench, top.txt, kernel description, OptDSLv2).
-5. Write `hls_eval_config.toml` with: tags = ["llm_gen"].
+Your Tasks:
+1. Improve scalability so both reported scores in the next `pareto_scores_summary.json` decrease. Understand the measure of scalability and follow the redesign guidance below.
+2. Maintain functional correctness and synthesizability and keep/improve structural complexity (at minimum: non-regress `average_function_lines`).
+3. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel_description.md, OptDSLv2 (opt_template.tcl)) reflecting the improved design.
+4. Write `hls_eval_config.toml` with: tags = ["llm_gen"].
+
+Edit Permissions & Expectations
+You are allowed, when it enables better Pareto fronts and preserves/improves structural complexity, to:
+- Refactor functions, split/merge modules, introduce additional pipeline stages, tiling, or buffering.
+- Adjust loop structures, labeling, memory layouts, data widths, and I/O protocols (arrays vs. streams), provided all bounds are static and Vitis-HLS-compatible.
+- Update `kernel_description.md` to a clear, revised spec; keep code consistent with the spec.
+- Ban cosmetic LOC inflation: do not increase LOC using comments/whitespace/no-ops/wrappers. Complexity gains must be algorithmic (new stages, real control/dataflow, locality/reuse, or tunable parallelism).
 
 {PROMPT_SCALABILITY_EXPLANATION}
 
-#### Measurement of Scalability:
+### Measurement of Scalability:
 Scalability is quantitatively evaluated using Pareto scores, which measure how effectively a benchmark design spans the tradeoff space between performance (latency) and hardware resource usage LUTs or FFs). 
 Each score is computed from 64 synthesized design points generated using the corresponding opt_template.tcl file.
 Numerically lower Pareto scores are better, indicating that the design supports a wide range of tunable tradeoffs and yields a smooth, continuous Pareto frontier.
 - The Pareto score is computed using:
     pareto_score = ((start_point_to_corner + end_point_corner) + max_gap) / ((start_point_to_corner + end_point_corner) + curve_length)
-- A score below 0.35 is considered excellent, reflecting strong directive sensitivity and a well-balanced optimization space.
+- A score below 0.3 is considered excellent, reflecting strong directive sensitivity and a well-balanced optimization space.
 - A score above 0.6 typically suggests poor scalability either due to rigid structures, design bottlenecks, or weak responsiveness to directive tuning.
 
 ### Redesign Guidance (tie your edits to `pareto_score_summary.json`)
-If score is None → must prioritize generating valid points(n_pareto_frontier_points) first before minimizing the score.
-- Increase frontier coverage and density (more points on the Pareto frontier).
-- Smooth the frontier (reduce `max_gap/curve_length`).
-- Improve directive sensitivity (loop labels, partitioned arrays, controlled pipelining/unrolling).
-- Keep loops statically bounded and the design modular and non-trivial
+Score → Action Cheatsheet (tie your redesign to these):
+- Low frontier density: if `n_pareto_frontier_points < 10` → too few tradeoff points.
+  Action: enrich design space with independent knobs (distinct labeled loops/arrays), use matched unroll/partition factor lists in OptDSLv2.
+- Far from corners: if `start_point_to_corner > 0.20` or `end_point_corner > 0.20` → frontier not reaching ideal low-lat/low-res or high-res/low-lat corners.
+  Action: add an extreme high-parallelism path (higher unroll + partition + pipeline) and an extreme serial path (lower unroll/partition, higher II).
+- Short frontier: if `curve_length < 0.60` → too few effective tradeoffs along the curve.
+  Action: add more independent knobs; ensure factors actually change II/ports (align unroll(loop) with partition(array, dim)).
+- Uneven coverage: if `max_gap/curve_length > 0.30` → large holes on the frontier.
+  Action: add intermediate factors in the gap region; de-fuse stages that collapse midpoints.
+- Latency-insensitive: if `max(latency)/min(latency) < 1.5` or `latency_range <= 0.10 * max(latency)` → resources change but latency doesn't.
+  Action: restructure to move cycles (split bottleneck loops/stages with buffers, expose parallel axes, mark key loops `pipeline(..., optional=True)`).
+- Invalid frontier: if `pareto_score is None` or `n_pareto_frontier_points < 2` or `latency_range == 0` or `resource_range == 0`.
+  Action: first ensure ≥2 non-dominated points with non-zero ranges:
+    - at least one grouped block with ≥3 factors (i.e. [1,2,4])  
+    - at least one ungrouped directive for cross-product  
+    - factors compatible with loop bounds / array dims (no saturating to same μ-arch).
+Other notes:
+- Match unroll factors to loop bounds and partition factors to accessed dimensions; misalignment → no throughput gain.
+- Avoid hidden fusion: separate stages so directives can change II, tripcounts, and memory banking.
+- Ensure both a "serial-ish" path (minimal parallelism) and a "parallel-ish" path (high parallelism) exist to guarantee non-zero `resource_range` and `latency_range`.
+- Keep loops statically bounded; maintain a modular, non-trivial pipeline with clear loop labels.
 
 ### Structural Requirements for the Benchmark Redesign:
 - The updated design should be non-trivial, meaning it includes both compute-heavy operations and non-trivial data dependencies. The complexity should allow rich exploration under HLS directive tuning.

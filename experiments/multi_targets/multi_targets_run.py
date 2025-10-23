@@ -40,7 +40,7 @@ available_targets = {
 }
 
 # Set the target list
-target_keys_list = ["n_funcs", "max_depth"]
+target_keys_list = ["n_funcs", "max_depth", "avg_func_loc", "scores"]  # Choose from available_targets keys
 target_list = [available_targets[k] for k in target_keys_list]
 run_name = f"run__{'__'.join(target_keys_list)}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
@@ -58,9 +58,9 @@ engine = SyntheticHLSEngine(
 
 engine.run(
     target_list=target_list,
-    n_seed_designs=12,
-    n_samples=4,
-    n_feedback_iterations=3,
-    n_max_versions=8,
+    n_seed_designs=32,
+    n_samples=8,
+    n_feedback_iterations=[2,2,2,3], # Specify iterations per target, total should match length of target_list or use single int for all
+    n_max_versions=4,
     fix=True
 )

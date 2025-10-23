@@ -147,6 +147,39 @@ def build_prompt_gen_zero_shot_single_input_with_opt(
 
     return p
 
+def build_prompt_gen_optdsl_v2(
+    design_description_fp: Path,
+    design_h: Path,
+    design_kernel: Path,
+    design_tb: Path,
+) -> str:
+    p = PROMPT_PRE
+    p += "\n\n"
+    p += PROMPT_GEN_OPTDSL_V2
+    p += "\n\n"
+    p += OUTPUT_FORMAT_OPTDSL
+    p += "\n\n"
+
+    p += "## Task Inputs\n"
+    p += "\n"
+
+    code_inputs = {
+        design_description_fp.name: design_description_fp.read_text(),
+        design_h.name: design_h.read_text(),
+        design_kernel.name: design_kernel.read_text(),
+        design_tb.name: design_tb.read_text(),
+    }
+
+    code = build_input_code_prompt_xml(code_inputs)
+    p += code
+    p += "\n\n"
+
+    p += "## Task Output\n"
+    p += "\n"
+
+    return p
+
+
 
 def build_prompt_fix(
     design_description_fp: Path,

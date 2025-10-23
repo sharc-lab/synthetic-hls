@@ -50,9 +50,9 @@ engine = SyntheticHLSEngine(
 
 engine.run(
     target_list=[target],
-    n_seed_designs=12,
-    n_samples=4,
-    n_feedback_iterations=5,
-    n_max_versions=8,
+    n_seed_designs=24,
+    n_samples=8,
+    n_feedback_iterations=7,
+    n_max_versions=4,
     fix=True
 )
