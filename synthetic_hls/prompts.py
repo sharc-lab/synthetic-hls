@@ -34,6 +34,7 @@ PROMPT_GENERAL_CONSTRAINTS = dedent(
   - Header files (`.h`)
   - Testbench files (`_tb.cpp`)
   - Optimization templates (`opt_template.tcl`)
+  - HLS evaluation config files (`hls_eval_config.toml`)
 - All generated code must be clean, syntactically correct, and self-contained without any inline or block comments.
 - The only textual explanation should be in the `kernel_description.md` file.
 
@@ -44,6 +45,11 @@ PROMPT_GENERAL_CONSTRAINTS = dedent(
 - DO NOT add any performance optimization pragmas such as `pipeline`, `unroll`, `array_partition`, `inline`, or similar in the kernel implementation file. The only pragma you are allowed to use is `#pragma HLS top name=...` to define the kernel top function.
 - Ensure the total design space defined by OptDSLv2 optimization template file includes a rich spread of latency vs. resource trade-offs.
 - The kernel description file must be saved as `kernel_description.md`. The toml file must be saved as `hls_eval_config.toml`. Do not emit alternative filenames.
+- The file `hls_eval_config.toml` MUST contain **exactly** the following single line (no extra keys, lines, comments, or whitespace changes):
+  `tags = ["llm_gen"]`
+  - Never omit or alter any character: keep the brackets `[ ]`, quotes `" "`, equals `=`, and capitalization exactly as shown.
+  - Do not add BOMs, trailing spaces, or additional newlines beyond the single line above.
+
 - Do not omit any part. Do not output anything other than the required seven complete code files.
     """
 ).strip()
@@ -89,8 +95,8 @@ Total variants =
   (Assumes other static directives don't change variant count.)
 ```
 - Example: Two groups `group_1` with factors `[1,2,4,8]` and `group_2` with factors `[1,2]` → 4 * 2;  
-  two ungrouped directives with `[1,2,4]` and `[1,2]` → *3 *2;  
-  one optional pipeline → *2.  
+  two ungrouped directives with `[1,2,4]` and `[1,2]` -> *3 *2;  
+  one optional pipeline -> *2.  
   TOTAL = 4 * 2 * 3 * 2 * 2 = 96 variants.
 
 #### OptDSL Output Requirements:
@@ -152,9 +158,9 @@ Total variants =
         - `partition("buffer", "kernel", "cyclic", [1, 2, FEATURE_SIZE], 1)`
 
         Correct usage (allowed):
-        - For loops with bound 3 → recommend `[3]`
-        - For loops with bound 64 → recommend `[1, 2, 4, 8]`
-        - For larger loops → consider `[2, 4, 8, 16]` if suitable
+        - For loops with bound 3 -> recommend `[3]`
+        - For loops with bound 64 -> recommend `[1, 2, 4, 8]`
+        - For larger loops -> consider `[2, 4, 8, 16]` if suitable
     If a loop processes an array along a specific dimension, the unroll factor list for that loop and the partition factor list on that array dimension should match to avoid banking conflicts.
     All directives in the same group MUST use the exact same factor list. Avoid mismatched factor list lengths or inconsistent values across grouped directives.
     For example, this is NOT allowed:
@@ -242,8 +248,7 @@ Your task is to:
 4. Output the name of the top-level function in a file named `top.txt`.
 5. Write a markdown file `kernel_description.md` that provides a concise, human-readable natural language description of the generated benchmark, explaining its functionality, purpose, inputs, and outputs.
 6. Generate an OptDSLv2 optimization template file named `opt_template.tcl` to enable design space exploration for the kernel implementation file only. The testbench file is not relevant for optimization and should not be considered.
-7. Write a hls_eval_config.toml file tagging the design with:
-    - `tags = ["llm_gen"]`
+7. Write a toml file named `hls_eval_config.toml` whose entire contents is exactly: `tags = ["llm_gen"]`.
 
 {PROMPT_SCALABILITY_EXPLANATION}
 
@@ -304,8 +309,7 @@ Your task is to:
 4. Output the name of the top-level function in a file named `top.txt`.
 5. Write a markdown file `kernel_description.md` that provides a concise, human-readable natural language description of the generated benchmark, explaining its functionality, purpose, inputs, and outputs.
 6. Generate an OptDSLv2 optimization template file named `opt_template.tcl` to enable design space exploration for the kernel implementation file only. The testbench file is not relevant for optimization and should not be considered.
-7. Write a hls_eval_config.toml file tagging the design with:
-    - `tags = ["llm_gen"]`
+7. Write a toml file named `hls_eval_config.toml` whose entire contents is exactly: `tags = ["llm_gen"]`.
 
 {PROMPT_SCALABILITY_EXPLANATION}
 
@@ -356,7 +360,14 @@ You are provided with a previously generated HLS benchmark that encountered synt
 
 Your task is to:
 1. Fix the synthesis errors in the provided benchmark.
-2. Regenerate all files with the corrections applied.
+2. Regenerate all files with the corrections applied:
+    - C++ kernel implementation file (`.cpp`)
+    - C++ header file (`.h`)
+    - Testbench file (`.cpp`)
+    - Top-level function name in `top.txt`
+    - Kernel description in `kernel_description.md`
+    - OptDSLv2 optimization template file named `opt_template.tcl`
+    - HLS evaluation config file `hls_eval_config.toml` whose entire content is exactly: `tags = ["llm_gen"]`
 3. Ensure the design remains fully synthesizable by Vitis HLS.
 
 ### Error Information:
@@ -399,8 +410,7 @@ while not regressing the other complexity metrics from `call_graph.json`. Specif
 - Workflow compliance is MANDATORY: All redesign and code generation must adhere to the Design-first workflow below. Deviation is considered incorrect.
 2. Fix or refine any unclear, redundant, trivial, or potentially invalid code and design structures if present in the input files.
 3. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel_description.md, OptDSLv2) reflecting the improved design.
-4. Write a hls_eval_config.toml file tagging the design with:
-    - `tags = ["llm_gen"]`
+4. Write a toml file named `hls_eval_config.toml` whose entire contents is exactly: `tags = ["llm_gen"]`
 
 ## Design-first workflow (MANDATORY)
 ### Step 1 - Read & revise the functional spec (Design-first, MANDATORY)
@@ -507,7 +517,7 @@ Your Tasks:
 1. Improve scalability so both reported scores in the next `pareto_scores_summary.json` decrease. Understand the measure of scalability and follow the redesign guidance below.
 2. Maintain functional correctness and synthesizability and keep/improve structural complexity (at minimum: non-regress `average_function_lines`).
 3. Generate updated versions of all files (kernel, header, testbench, top.txt, kernel_description.md, OptDSLv2 (opt_template.tcl)) reflecting the improved design.
-4. Write `hls_eval_config.toml` with: tags = ["llm_gen"].
+4. Write a toml file named `hls_eval_config.toml` whose entire contents is exactly: `tags = ["llm_gen"]`
 
 Edit Permissions & Expectations
 You are allowed, when it enables better Pareto fronts and preserves/improves structural complexity, to:
@@ -528,24 +538,24 @@ Numerically lower Pareto scores are better, indicating that the design supports 
 - A score above 0.6 typically suggests poor scalability either due to rigid structures, design bottlenecks, or weak responsiveness to directive tuning.
 
 ### Redesign Guidance (tie your edits to `pareto_score_summary.json`)
-Score → Action Cheatsheet (tie your redesign to these):
-- Low frontier density: if `n_pareto_frontier_points < 10` → too few tradeoff points.
+Score -> Action Cheatsheet (tie your redesign to these):
+- Low frontier density: if `n_pareto_frontier_points < 10` -> too few tradeoff points.
   Action: enrich design space with independent knobs (distinct labeled loops/arrays), use matched unroll/partition factor lists in OptDSLv2.
-- Far from corners: if `start_point_to_corner > 0.20` or `end_point_corner > 0.20` → frontier not reaching ideal low-lat/low-res or high-res/low-lat corners.
+- Far from corners: if `start_point_to_corner > 0.20` or `end_point_corner > 0.20` -> frontier not reaching ideal low-lat/low-res or high-res/low-lat corners.
   Action: add an extreme high-parallelism path (higher unroll + partition + pipeline) and an extreme serial path (lower unroll/partition, higher II).
-- Short frontier: if `curve_length < 0.60` → too few effective tradeoffs along the curve.
+- Short frontier: if `curve_length < 0.60` -> too few effective tradeoffs along the curve.
   Action: add more independent knobs; ensure factors actually change II/ports (align unroll(loop) with partition(array, dim)).
-- Uneven coverage: if `max_gap/curve_length > 0.30` → large holes on the frontier.
+- Uneven coverage: if `max_gap/curve_length > 0.30` -> large holes on the frontier.
   Action: add intermediate factors in the gap region; de-fuse stages that collapse midpoints.
-- Latency-insensitive: if `max(latency)/min(latency) < 1.5` or `latency_range <= 0.10 * max(latency)` → resources change but latency doesn't.
+- Latency-insensitive: if `max(latency)/min(latency) < 1.5` or `latency_range <= 0.10 * max(latency)` -> resources change but latency doesn't.
   Action: restructure to move cycles (split bottleneck loops/stages with buffers, expose parallel axes, mark key loops `pipeline(..., optional=True)`).
 - Invalid frontier: if `pareto_score is None` or `n_pareto_frontier_points < 2` or `latency_range == 0` or `resource_range == 0`.
-  Action: first ensure ≥2 non-dominated points with non-zero ranges:
-    - at least one grouped block with ≥3 factors (i.e. [1,2,4])  
+  Action: first ensure >= 2 non-dominated points with non-zero ranges:
+    - at least one grouped block with >= 3 factors (i.e. [1,2,4])  
     - at least one ungrouped directive for cross-product  
-    - factors compatible with loop bounds / array dims (no saturating to same μ-arch).
+    - factors compatible with loop bounds / array dims.
 Other notes:
-- Match unroll factors to loop bounds and partition factors to accessed dimensions; misalignment → no throughput gain.
+- Match unroll factors to loop bounds and partition factors to accessed dimensions; misalignment -> no throughput gain.
 - Avoid hidden fusion: separate stages so directives can change II, tripcounts, and memory banking.
 - Ensure both a "serial-ish" path (minimal parallelism) and a "parallel-ish" path (high parallelism) exist to guarantee non-zero `resource_range` and `latency_range`.
 - Keep loops statically bounded; maintain a modular, non-trivial pipeline with clear loop labels.

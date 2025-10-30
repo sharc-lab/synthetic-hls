@@ -80,8 +80,7 @@ class FeedbackDesignLoop:
                     for sample_idx in range(self.n_samples):
                         prev_design_fix_dir = iter_samples_dir / f"sample_{sample_idx}"
                         if not prev_design_fix_dir.exists():
-                            prev_design_fix = seed_design
-                            prev_error_message = None
+                            continue
                         else:
                             print(f"Retrying iter {iter_idx} sample {sample_idx} from previous design {prev_design_fix_dir}.")
                             prev_design_fix = Design(prev_design_fix_dir / "design_generated")
@@ -114,10 +113,14 @@ class FeedbackDesignLoop:
                     
                     if target == "pareto_scores":
                         best_dir, best_val_1, best_val_2 = min(candidates, key=lambda x: (x[1] + x[2]))
-                        prev_val_1 = float(prev_sample_eval_data.get("opt_dsl_out", {}).get("pareto_scores", {}).get("LUTs_vs_latency", 1.0))
-                        prev_val_2 = float(prev_sample_eval_data.get("opt_dsl_out", {}).get("pareto_scores", {}).get("FFs_vs_latency", 1.0))
+                        prev_ps = prev_sample_eval_data.get("opt_dsl_out", {}).get("pareto_scores", None)
+                        prev_val_1 = float(prev_ps.get("LUTs_vs_latency", 1.0)) if prev_ps.get("LUTs_vs_latency", 1.0) is not None else 1.0
+                        prev_val_2 = float(prev_ps.get("FFs_vs_latency", 1.0)) if prev_ps.get("FFs_vs_latency", 1.0) is not None else 1.0
+                        prev_val_3 = float(prev_sample_eval_data.get("kernel_ast_out", {}).get("average_function_lines", None))
                         if best_val_1 == 1.0 and best_val_2 == 1.0:
                             print(f"All candidates in iter {iter_idx} cycle {cycle_count} have invalid Pareto scores, continuing to next cycle.")
+                            if prev_val_1 < 1.0 or prev_val_2 < 1.0 or prev_val_3 > best_val_3:
+                                best_dir = prev_design.design_dir                        
                         else:
                             pass_iter = True
                             
@@ -159,7 +162,7 @@ class FeedbackDesignLoop:
                 print(f"Iteration {iter_idx} target {target} found best design {best_design.design_dir} with value {best_val_1} and avg_func_loc {best_val_2} after {cycle_count + 1} cycles.")
             
             # If next target is pareto_scores, run pareto scores evaluation for the selected design
-            if target_next == "pareto_scores":
+            if target != "pareto_scores" and target_next == "pareto_scores":
                 opt_out, out_dir = self.evaluator.run_hlsfactory_flow(
                     design_generated_dir=best_design.design_dir,
                     eval_dir_top=best_design.design_dir.parent,
@@ -288,7 +291,7 @@ class SeedDesignGenerator:
 
     def run(self, reference_designs: List[Design] = None):
         self.seed_design_names = []
-        Parallel(n_jobs=4, backend="threading")(
+        Parallel(n_jobs=8, backend="threading")(
             delayed(self.run_single)(f"seed_design__{i}", reference_design) for i in range(self.n_seed_designs) for reference_design in (reference_designs if reference_designs else [None])
         )
         # Aggregate all eval data from all seed designs
@@ -335,14 +338,6 @@ class SeedDesignGenerator:
             seed_design=None if reference_design is None else reference_design,
         )
         if error_message is None:
-            if self.target == "pareto_scores":
-                current_design_eval_data_fp = current_design.design_dir / "single_eval_data.json"
-                current_design_eval_data = json.loads(current_design_eval_data_fp.read_text())
-                current_LUTs_ps = float(current_design_eval_data.get("opt_dsl_out", {}).get("pareto_scores", {}).get("LUTs_vs_latency", 1.0))
-                current_FFs_ps = float(current_design_eval_data.get("opt_dsl_out", {}).get("pareto_scores", {}).get("FFs_vs_latency", 1.0))
-                if current_LUTs_ps == 1.0 and current_FFs_ps == 1.0:
-                    print(f"Generated seed design {seed_design_name} has invalid Pareto scores, skipping.")
-                    return
             pass_designs_dir = self.seed_design_dir / "pass_designs"
             current_design.copy_to(pass_designs_dir / seed_design_name)
             current_design_eval_data_fp = self.seed_design_dir / seed_design_name / "single_eval_data.json"
