@@ -194,33 +194,39 @@ The generated `opt_template.tcl` file should:
 
 COMPLEXITY_TARGETS: Dict[str, str] = {
     "max_call_chain_depth": dedent("""
-        Increase this complexity dimension: maximum call-chain depth.
-        Target: increase `max_call_chain_depth` by >= 1 while maintaining or increasing `average_function_lines` (from `call_graph.json`).
-        - Any added depth must result from meaningful intermediate subfunctions performing real computation/control (no wrappers).
-        - Substance guard: every new/modified function should have LOC >= baseline `average_function_lines` and add non-trivial logic (loops, transformations, branching, or orchestration with in-between logic).
-        - No filler: do not add meaningless lines, redundant code, or micro-splits that only inflate counts.
-        - Keep the top-level kernel interface unchanged.
+        maximum call-chain depth
+        - Goal: Increase the structural depth of the design by introducing additional, meaningful function-call layers.
+          This measures how deep the function hierarchy is (i.e., how many levels of calls exist from the top kernel down).
+        - Target: increase `max_call_chain_depth` by >= 1 while maintaining or increasing `average_function_lines` (from `call_graph.json`).
+          - Any added depth must result from meaningful intermediate subfunctions performing real computation/control (no wrappers).
+          - Substance guard: every new/modified function should have LOC >= baseline `average_function_lines` and add non-trivial logic (loops, transformations, branching, or orchestration with in-between logic).
+          - No filler: do not add meaningless lines, redundant code, or micro-splits that only inflate counts.
+          - Keep the top-level kernel interface unchanged.
     """).strip(),
 
     "num_functions": dedent("""
-        Increase this complexity dimension: number of functions.
-        Target: add >= 1 meaningful subfunctions while maintaining or increasing `average_function_lines` (from `call_graph.json`).
-        - Substance guard: each new function must have LOC >= baseline `average_function_lines` and encapsulate real computation, data movement, or control.
-        - No filler: avoid wrappers, redundant lines, or trivial splits that reduce substance or only inflate counts.
-        - Keep the top-level kernel interface unchanged.
+        number of functions
+        - Goal: Expand the modular structure by adding new, non-trivial subfunctions that perform real computational or control work.
+          This measures the number of unique function definitions in the design.
+        - Target: add >= 1 meaningful subfunctions while maintaining or increasing `average_function_lines` (from `call_graph.json`).
+          - Substance guard: each new function must have LOC >= baseline `average_function_lines` and encapsulate real computation, data movement, or control.
+          - No filler: avoid wrappers, redundant lines, or trivial splits that reduce substance or only inflate counts.
+          - Keep the top-level kernel interface unchanged.
     """).strip(),
 
     "average_function_lines": dedent("""
-        Increase this complexity dimension: average function lines.
-        Target: increase `average_function_lines` (from `call_graph.json`) by >= 0.1 relative to the current baseline
+        average function lines
+        - Goal: Increase the average size (in lines of code) of functions by adding meaningful algorithmic content rather than filler.
+          This measures how substantial each function is on average.
+        - Target: increase `average_function_lines` (from `call_graph.json`) by >= 0.1 relative to the current baseline
                 (or by >= 2 LOC if the baseline < 20), without reducing synthesizability.
-        - Strategy (substantive ways to add LOC):
-          - Add meaningful computation blocks: tiled inner loops, reductions, windowed/stencil ops, prefix/suffix transforms.
-          - Introduce mid-level orchestration: explicit buffer staging, boundary handling, loop-carried state, or reduction trees.
-          - Replace opaque one-liners with explicit staged steps and intermediate values that HLS can analyze.
-        - Substance guard: every modified function must include at least one non-trivial element (loop, branch, reduction,
-          data reorganization) and should meet or exceed the baseline `average_function_lines`.
-        - No filler: avoid dead code, no-op variables, redundant copies, excessive parameter padding, or comment-only inflation.
+          - Strategy (substantive ways to add LOC):
+            - Add meaningful computation blocks: tiled inner loops, reductions, windowed/stencil ops, prefix/suffix transforms.
+            - Introduce mid-level orchestration: explicit buffer staging, boundary handling, loop-carried state, or reduction trees.
+            - Replace opaque one-liners with explicit staged steps and intermediate values that HLS can analyze.
+          - Substance guard: every modified function must include at least one non-trivial element (loop, branch, reduction,
+            data reorganization) and should meet or exceed the baseline `average_function_lines`.
+          - No filler: avoid dead code, no-op variables, redundant copies, excessive parameter padding, or comment-only inflation.
     """).strip(),
 }
 
@@ -262,7 +268,8 @@ Your task is to:
 ### Structural Requirements for the Benchmark Design:
 - You must build a full, multi-stage application accelerator, not just a reusable module. It should involve multiple sub-functions or kernels, realistic data access and compute dependencies, and ideally feature both compute-intensive and logic-driven stages.
 - Your generated benchmark must not be limited to simple filters, matrix operations, or textbook-style kernels.
-- You are encouraged to model your generated benchmark as a complete pipeline, integrating at least 4 or 6 sub-functions or logical modules that reflect realistic data flow, memory usage, control logic, and computational diversity. Each benchmark should serve a clear, self-contained purpose within a real-world scenario. 
+- You are encouraged to model your generated benchmark as a complete pipeline, integrating at least 4 or 6 sub-functions or logical modules that reflect realistic data flow, memory usage, control logic, and computational diversity. 
+- Each benchmark should serve a clear, self-contained purpose within a real-world scenario. 
 
 - Examples of stage types:
   - Sensor ingestion / buffering
@@ -278,6 +285,13 @@ Your task is to:
 - **Onboard Satellite Communication Scheduler**: Solves a constrained task assignment problem for satellite downlink jobs. The kernel handles task queuing, visibility window filtering, priority-aware slot assignment, and thermal/power constraint enforcement in a time-slotted framework.
 - **Multi-Agent Swarm Coordination Kernel**: Simulates and controls agent motion in a distributed swarm system. Handles neighbor sensing, consensus update rules, collision avoidance logic, and group target convergence in bounded grid space.
 - **Medical Diagnostic Assistant**: Accelerates diagnosis logic from biosensor streams. It performs real-time signal filtering, multi-parameter health scoring, diagnostic rule matching, and patient state alerting with adjustable thresholds.
+
+- The generated designs are strongly encouraged to include various forms of dataflow between stages, such as:
+  - Streamed producer-consumer connections (`hls::stream`) for pipelined handshaking.
+  - Sequential buffer-based transfers for time-phased computation.
+  - Parallel or partially overlapped execution between compute modules.
+  - Staged processing where each sub-function performs a distinct transformation or decision before passing results onward.
+- Each benchmark should exhibit visible data movement patterns that can be analyzed by synthesis tools, enabling directive-driven exploration of throughput, II, and resource utilization trade-offs.
 
 - The design should be non-trivial, meaning it includes both compute-heavy operations and non-trivial data dependencies. The complexity should allow rich exploration under HLS directive tuning.
 - The kernel must process structured data, contain multiple computation layers or phases, and represent a self-contained functional pipeline.
@@ -553,7 +567,7 @@ Score -> Action Cheatsheet (tie your redesign to these):
   Action: first ensure >= 2 non-dominated points with non-zero ranges:
     - at least one grouped block with >= 3 factors (i.e. [1,2,4])  
     - at least one ungrouped directive for cross-product  
-    - factors compatible with loop bounds / array dims.
+    - factors compatible with loop bounds / array dims (no saturating to same μ-arch).
 Other notes:
 - Match unroll factors to loop bounds and partition factors to accessed dimensions; misalignment -> no throughput gain.
 - Avoid hidden fusion: separate stages so directives can change II, tripcounts, and memory banking.

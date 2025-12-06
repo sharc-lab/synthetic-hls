@@ -1,8 +1,6 @@
 import datetime
 from pathlib import Path
 from dotenv import dotenv_values
-import sys
-sys.path.append(str(Path(__file__).resolve().parent.parent.parent))
 
 from synthetic_hls.engine import SyntheticHLSEngine
 from synthetic_hls.llm_models import build_model_remote_openrouter
@@ -10,10 +8,9 @@ from synthetic_hls.vhls_tools import VitisHLSCSimTool, VitisHLSSynthTool, auto_f
 from synthetic_hls.utils import unwrap
 
 ### Setup Directories ###
-
 DIR_CURRENT = Path(__file__).parent
 DIR_TOP = DIR_CURRENT.parent.parent
-DIR_WORKSPACE = DIR_CURRENT / "workspace"
+DIR_WORKSPACE = DIR_CURRENT / "workspace_single_target"
 DIR_TEMPLATE_FILES = DIR_TOP / "tcl_templates"
 
 # Set clang and include paths for ast analysis. If not set, it will try to use system default clang.
@@ -24,35 +21,51 @@ vitis_hls_dir = unwrap(auto_find_vitis_hls_dir(), "Vitis HLS bin not auto found"
 API_KEY_OPENROUTER = dotenv_values(".env")["OPENROUTER_API_KEY"]
 
 ### Setup Models ###
-
-MODEL_NAME = "openai/gpt-oss-20b"
-
-model = build_model_remote_openrouter(MODEL_NAME, api_key=API_KEY_OPENROUTER)
+MODELS_NAMES = ["openai/gpt-oss-120b"]
+models = [build_model_remote_openrouter(name, api_key=API_KEY_OPENROUTER) for name in MODELS_NAMES]
 
 ### Run Main Stuff ###
-
 # Available Targets now(Working on including others): "num_functions", "max_call_chain_depth", "average_function_lines", "pareto_scores"
-target = "max_call_chain_depth"
+target = "num_functions"
 run_name = f"run__{target}_{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
-print(f"Run Name: {run_name}, Target: {target}, Model: {MODEL_NAME}")
+print(f"Run Name: {run_name}, Target: {target}, Models: {MODELS_NAMES}")
+
 
 engine = SyntheticHLSEngine(
     run_name=run_name,
-    dir_workspace=DIR_WORKSPACE / MODEL_NAME.split("/")[1],
-    template_files_path=DIR_TEMPLATE_FILES,
+    dir_workspace=DIR_WORKSPACE,
     vitis_hls_tool_csim=VitisHLSCSimTool(vitis_hls_dir),
     vitis_hls_tool_synth=VitisHLSSynthTool(vitis_hls_dir),
-    model=model,
+    models=models,
     temperature=0.9,
     clang_path=CLANG_PATH,
-    include_paths=INCLUDE_PATHS
+    include_paths=INCLUDE_PATHS,
 )
 
+"""
+Experiment configuration (single-target):
+- target_list: list[str], List of target metrics to optimize. For single-target, only one target is used.
+- n_seed_designs: int, Number of seed designs to start with.
+- n_samples: int, Number of samples to generate in each iteration.
+- n_feedback_iterations: list[int] | int (can use int for single-target), For each target in target_list, how many
+    feedback iterations to run.
+    -- Same length as target_list; i.e., here: 7 for the num_functions target.
+- n_jobs_design: int, Total design-level parallelism (seed-level * sample-level).
+    -- Note: This controls only the outer design loop. Inside the engine
+       there is separate thread pool for LLM, C-simulation, and synthesis
+       (EvalThreadPools: n_jobs_pool_llm, n_jobs_pool_csim, n_jobs_pool_synth),
+       which further parallelize work per design.
+- n_jobs_hlsfactory: int, Parallel jobs inside HLSFactory for Pareto scores evaluation.
+- fix: bool, Whether to let the engine try to fix if all samples fail.
+- run_vivado_impl: bool, If True, run full Vivado implementation; False = HLS-only exploration.
+"""
 engine.run(
     target_list=[target],
-    n_seed_designs=24,
-    n_samples=8,
+    n_seed_designs=36,
+    n_samples=12,
     n_feedback_iterations=7,
-    n_max_versions=4,
-    fix=True
+    n_jobs_design=24,
+    n_jobs_hlsfactory=24, 
+    fix=True,
+    run_vivado_impl=False
 )

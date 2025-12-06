@@ -20,6 +20,7 @@ from hlsfactory.flow_vitis import (
     VitisHLSSynthFlow,
 )
 from hlsfactory.framework import (
+    Design,
     DesignDataset,
     DesignDatasetCollection,
     count_total_designs_in_dataset_collection,
@@ -31,7 +32,7 @@ from hlsfactory.utils import (
     get_tool_paths,
     remove_and_make_new_dir_if_exists,
 )
-from hlsfactory.data_packaging import DataAggregatorXilinx
+from hlsfactory.data_packaging import DataAggregatorXilinx, CompleteHLSData
 
 class ASTAnalyzer:
     """
@@ -254,6 +255,7 @@ class HLSFactoryFlow:
         n_random_samples: int = 64,
         random_sample_seed: int = 64,
         n_jobs: int = 8,
+        run_vivado_impl: bool = True,
     ):
         self.design_dir = design_dir
         self.dataset_dir = design_dir.parent
@@ -264,6 +266,36 @@ class HLSFactoryFlow:
         self.n_random_samples = n_random_samples
         self.random_sample_seed = random_sample_seed
         self.n_jobs = n_jobs
+        self.run_vivado_impl = run_vivado_impl
+
+    def package_designs(self, designs, output_dir, dataset_name):
+        xilinx_aggregator = DataAggregatorXilinx()
+
+        if self.run_vivado_impl:
+            # full flow
+            data = xilinx_aggregator.gather_multiple_designs(designs, n_jobs=16)
+        else:
+            # HLS-only
+            data = []
+            for design in designs:
+                design_meta = xilinx_aggregator.gather_hls_design_data(design)
+                synth_meta  = xilinx_aggregator.gather_hls_synthesis_data(design)
+                d = CompleteHLSData(
+                    design=design_meta,
+                    synthesis=synth_meta,
+                    implementation=None,
+                    execution=None,
+                    artifacts=None,
+                )
+                data.append(d)
+
+        output_archive_fp = output_dir / f"{dataset_name}.zip"
+        xilinx_aggregator.aggregated_data_to_archive(data, output_archive_fp)
+        print(f"Data saved: {output_archive_fp}")
+
+        with zipfile.ZipFile(output_archive_fp, "r") as z, z.open("data_all.csv") as f:
+            df_all = pd.read_csv(f)
+        return df_all
 
     def pareto_frontier(self, df, x_col: str, y_col: str) -> pd.DataFrame:
         if y_col not in df.columns or x_col not in df.columns:
@@ -328,26 +360,18 @@ class HLSFactoryFlow:
         dataset_name = self.dataset_dir.name
         dataset = DesignDataset.from_dir(dataset_name, self.work_dir / f"{dataset_name}__post_frontend" )
         designs = dataset.designs
+        data_all = self.package_designs(designs, output_dir, dataset_name)
 
-        xilinx_aggregator = DataAggregatorXilinx()
-
-        data = xilinx_aggregator.gather_multiple_designs(designs, n_jobs=16)
-        output_archive_fp = output_dir / f"{dataset_name}.zip"
-        xilinx_aggregator.aggregated_data_to_archive(
-            data,
-            output_archive_fp,
-            )
-        print(f"Data saved: {dataset_name}.zip")
-        # print(output_archive_fp)
-
-        data_all_zip_fp = "data_all.csv"
-        with zipfile.ZipFile(output_archive_fp, "r") as z, z.open(data_all_zip_fp) as f:
-            data_all = pd.read_csv(f)
-
-        resource_map = {
-            "LUTs": "implementation__utilization__Total LUTs",
-            "FFs": "implementation__utilization__FFs",
-        }
+        if self.run_vivado_impl:  
+            resource_map = {
+                "LUTs": "implementation__utilization__Total LUTs",
+                "FFs": "implementation__utilization__FFs",
+            }
+        else:
+            resource_map = {
+                "LUTs": "synthesis__resources_lut_used",
+                "FFs": "synthesis__resources_ff_used",
+            }
 
         all_summary = {}
         with open(design_dir / "pareto_scores.txt", "a") as f:
@@ -361,7 +385,6 @@ class HLSFactoryFlow:
         with open(design_dir / "pareto_scores_summary.json", "w") as jf:
             json.dump(all_summary, jf, indent=4)
 
-        # shutil.copy(design_dir / "pareto_scores.txt", design_generated_dir / "pareto_scores.txt")
         shutil.copy(design_dir / "pareto_scores_summary.json", design_generated_dir / "pareto_scores_summary.json")
 
     def opt_dsl_check(self) -> bool:
@@ -402,8 +425,8 @@ class HLSFactoryFlow:
             )
         )
 
-        TIMEOUT_HLS_SYNTH = 60.0 * 32
-        TIMEOUT_HLS_IMPL = 60.0 * 90
+        TIMEOUT_HLS_SYNTH = 60.0 * 16 
+        TIMEOUT_HLS_IMPL = 60.0 * 45 # 90 mins originally
 
         toolflow_vitis_hls_synth = VitisHLSSynthFlow(
             vitis_hls_bin=str(self.vitis_hls_bin),
@@ -419,30 +442,31 @@ class HLSFactoryFlow:
                 timeout=TIMEOUT_HLS_SYNTH,
             )
         )
+        
+        if self.run_vivado_impl:
+            toolflow_vitis_hls_implementation = VitisHLSImplFlow(
+                vitis_hls_bin=str(self.vitis_hls_bin),
+                env_var_xilinx_hls=str(self.vitis_hls_dir),
+                env_var_xilinx_vivado=str(self.vivado_dir),
+            )
+            datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel(
+                datasets_post_hls_synth,
+                False,
+                n_jobs=self.n_jobs,
+                cpu_affinity=range(self.n_jobs),
+                timeout=TIMEOUT_HLS_IMPL,
+            )
 
-        toolflow_vitis_hls_implementation = VitisHLSImplFlow(
-            vitis_hls_bin=str(self.vitis_hls_bin),
-            env_var_xilinx_hls=str(self.vitis_hls_dir),
-            env_var_xilinx_vivado=str(self.vivado_dir),
-        )
-        datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel(
-            datasets_post_hls_synth,
-            False,
-            n_jobs=self.n_jobs,
-            cpu_affinity=range(self.n_jobs),
-            timeout=TIMEOUT_HLS_IMPL,
-        )
-
-        ### Vivado Reporting Flow ###
-        toolflow_vitis_hls_impl_report = VitisHLSImplReportFlow(
-            vitis_hls_bin=str(self.vitis_hls_bin),
-            vivado_bin=str(self.vivado_bin),
-            env_var_xilinx_hls=str(self.vitis_hls_dir),
-            env_var_xilinx_vivado=str(self.vivado_dir),
-        )
-        toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel(
-            datasets_post_hls_implementation,
-            False,
-            n_jobs=self.n_jobs,
-            cpu_affinity=range(self.n_jobs),
-        )
+            ### Vivado Reporting Flow ###
+            toolflow_vitis_hls_impl_report = VitisHLSImplReportFlow(
+                vitis_hls_bin=str(self.vitis_hls_bin),
+                vivado_bin=str(self.vivado_bin),
+                env_var_xilinx_hls=str(self.vitis_hls_dir),
+                env_var_xilinx_vivado=str(self.vivado_dir),
+            )
+            toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel(
+                datasets_post_hls_implementation if self.run_vivado_impl else datasets_post_hls_synth,
+                False,
+                n_jobs=self.n_jobs,
+                cpu_affinity=range(self.n_jobs),
+            )

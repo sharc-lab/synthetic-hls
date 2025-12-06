@@ -60,18 +60,21 @@ class DesignEvaluator:
         self,
         vitis_hls_tool_csim: VitisHLSCSimTool,
         vitis_hls_tool_synth: VitisHLSSynthTool,
-        template_files_path: Path,
         temperature: float = 0.7,
         clang_path: Optional[Path] = None,
         include_paths: Optional[List[Path]] = None,
+        run_vivado_impl: bool = True,
+        n_jobs_hlsfactory: int = 24
     ) -> None:
         self.cpp_compiler_tool = vitis_hls_tool_csim
         self.vitis_hls_tool = vitis_hls_tool_synth
-        self.template_files_path = Path(template_files_path)
+        self.template_files_path = Path(__file__).resolve().parent / "tcl_templates"
         self.temperature = temperature
         self.clang_path = clang_path
         self.include_paths = include_paths
         self.logger = logging.getLogger(__name__)
+        self.run_vivado_impl = run_vivado_impl
+        self.n_jobs_hlsfactory = n_jobs_hlsfactory
 
     def _serialize_eval_data(self, eval_id: str, eval_output_dir: Path, single_eval_data: dict):
         print(f"[{eval_id}] Saving eval data to json...")
@@ -119,7 +122,7 @@ class DesignEvaluator:
         self,
         design_generated_dir: Path,
         eval_dir_top: Path,
-        eval_id: str,
+        eval_design_id: str,
         top_function_name: str,
     ) -> tuple[Path, Path, "HLSFactoryFlow", str]:
         """
@@ -130,8 +133,8 @@ class DesignEvaluator:
         assert kernel_header is not None, "No kernel header (*.h) found."
         kernel_name = kernel_header.stem
 
-        output_design_dir = eval_dir_top / "output_designs" / eval_id / kernel_name
-        current_design = Design(design_generated_dir, name=f"{eval_id}")
+        output_design_dir = eval_dir_top / "output_designs" / eval_design_id / kernel_name
+        current_design = Design(design_generated_dir, name=f"{eval_design_id}")
         output_design = current_design.copy_to(output_design_dir)
 
         # split into src/tb
@@ -160,16 +163,17 @@ class DesignEvaluator:
         content = content.replace("[kernel_name]", kernel_name)
         hls_template.write_text(content)
 
-        work_dir = eval_dir_top / "raw_data" / eval_id
+        work_dir = eval_dir_top / "raw_data" / eval_design_id
         remove_and_make_new_dir_if_exists(work_dir)
-
+        
         # Initialize HLSFactoryFlow
         design_hlsfactory_flow = HLSFactoryFlow(
             design_dir=output_design_dir,
             work_dir=work_dir,
             n_random_samples=64,
             random_sample_seed=64,
-            n_jobs=8,
+            n_jobs=self.n_jobs_hlsfactory,
+            run_vivado_impl=self.run_vivado_impl,
         )
         return output_design_dir, work_dir, design_hlsfactory_flow, kernel_name
 
@@ -178,6 +182,7 @@ class DesignEvaluator:
         design_generated_dir: Path,
         eval_dir_top: Path,
         eval_id: str,
+        eval_design_id: str,
         top_function_name: str,
     ) -> tuple[dict, Path]:
         """
@@ -185,7 +190,7 @@ class DesignEvaluator:
         Returns (opt_dsl_out_dict, output_design_dir).
         """
         output_design_dir, work_dir, design_hlsfactory_flow, _kernel = self._prepare_hlsfactory_inputs(
-            design_generated_dir, eval_dir_top, eval_id, top_function_name
+            design_generated_dir, eval_dir_top, eval_design_id, top_function_name
         )
 
         # Validate OptDSL
@@ -207,7 +212,7 @@ class DesignEvaluator:
             design_hlsfactory_flow.analyze(
                 design_generated_dir=design_generated_dir,
                 design_dir=output_design_dir,
-                output_dir=eval_dir_top / "zip_data" / eval_id,
+                output_dir=eval_dir_top / "zip_data" / eval_design_id,
             )
 
         try:
@@ -262,7 +267,7 @@ class DesignEvaluator:
 
         eval_data: dict[str, Any] = {}
 
-        eval_id = design_id
+        eval_id = f"{design_id}__{model_name_normalized}"
         eval_data["eval_type"] = "hls_gen_zero_shot"
         eval_data["eval_id"] = eval_id
         eval_data["status"] = "Fail"
@@ -284,7 +289,7 @@ class DesignEvaluator:
 
         if seed_design is not None:
             eval_data["seed_design_name"] = seed_design.name
-            eval_data["seed_design_tags"] = seed_design.tags_all
+            eval_data["seed_design_tags"] = ["llm_gen"]
             design_dir = eval_dir / "design"
             seed_design.copy_to(design_dir)
 
@@ -558,6 +563,7 @@ class DesignEvaluator:
                     design_generated_dir=design_generated_dir,
                     eval_dir_top=eval_dir_top,
                     eval_id=eval_id,
+                    eval_design_id=design_id,
                     top_function_name=top_function_name,
                 )
                 eval_data["opt_dsl_out"] = opt_out
