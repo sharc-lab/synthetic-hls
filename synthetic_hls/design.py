@@ -103,7 +103,7 @@ class Design:
 
     @property
     def call_graph_fp(self) -> Path:
-        fp = self.design_dir / "call_grdaph.json"
+        fp = self.design_dir / "call_graph.json"
         if not fp.exists():
             return None
         return fp   
