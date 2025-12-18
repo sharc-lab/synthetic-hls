@@ -264,11 +264,11 @@ def build_prompt_gen_feedback(
         design_tb.name: design_tb.read_text(),
     }
 
-    if design_call_graph:
-        code_inputs[design_call_graph.name] = design_call_graph.read_text()
-
     if design_opt:
         code_inputs[design_opt.name] = design_opt.read_text()
+
+    if design_call_graph:
+        code_inputs[design_call_graph.name] = design_call_graph.read_text()
 
     if design_pareto_score:
         code_inputs[design_pareto_score.name] = design_pareto_score.read_text()
