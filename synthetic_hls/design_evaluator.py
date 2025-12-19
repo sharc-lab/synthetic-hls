@@ -82,42 +82,67 @@ class DesignEvaluator:
         (eval_output_dir / "single_eval_data.json").write_text(str(single_eval_data_json))
 
     def _generate_error_message(self, prev_design_eval_data: dict) -> str:
-        prev_design_syn_data = prev_design_eval_data["vitis_hls_tool_out"]["data_execution"]
-        if prev_design_eval_data["status"] == "Pass":
-            return None
-        else:
-            c = ""
-            if prev_design_eval_data["opt_dsl_out"]["return_code"] == 1:
-                return ("OptDSL Error")
-            if (
-                "timeout" in prev_design_syn_data
-                and prev_design_syn_data["timeout"] is True
-            ):
-                e = ""
-                e += "The generated code could not be synthesized with Vitis HLS. Please fix the issue and regenerate the corrected code.\n Also regenerate the updated OptDSLv2 optimization template file `opt_template.tcl` file that matches the corrected kernel structure and defines the proper design space.\n"
-                e += c 
-                e += "Error:\n"
-                e += "The synthesis process timed out under the user defined timeout limit for HLS synthesis.\n"
-                e += "This can be due to the way the code is written in combination with specific pragma settings and options that cause HLS scheduling and binding to take an unreasonably long time.\n"
-                e += "The main cause of this issue is the use of #prgama HLS PIPELINE (with or without II=1) when the code can not be pipelined or has nontrivial loop or carry dependencies.\n"
-                e += "If this is the case, remove the pragma HLS PIPELINE pragmas and try again.\n"
-                e += "Consider the following suggestions:\n"
-                e += "- Manually refactor the code and check pragma settings to improve the parallelism and data locality to reduce the scheduling and binding time of the HLS tool.\n"
-                e += "- Check for instances that can cause a high II (iteration interval) for code that will be pipelined.\n"
-                e += "- Avoid naively pipelining code with PIPELINE or PIPELINE II=1, as this can cause a high II if a loop or function body can not be easly pipelined or have nontrivial loop or carry dependencies.\n"
-                e += "- Check the generated code for any other potential issues that may be causing the synthesis process to take an unreasonably long time.\n"
-                return e
-
-            synth_log = prev_design_syn_data["stdout"]
+        if prev_design_eval_data["c_compile_out"]["data_execution"]["return_code"] != 0:
+            c_compile_log = prev_design_eval_data["c_compile_out"]["data_execution"]["stdout"]
             error_lines = [
-                line for line in synth_log.split("\n") if line.startswith("ERROR: ")
+                line for line in c_compile_log.split("\n") if ("error: ") in line
             ]
             return (
-                "The generated code could not be synthesized with Vitis HLS. Please fix the issue and regenerate the corrected code. \nError Messages:\n"
-                + c
+                f"The generated code could not be compiled with a traditional C++ compiler. Please fix the issue and regenerate the corrected code. \nError Messages:\n"
                 + "\n".join(error_lines)
             )
+        
+        if "c_run_out" in prev_design_eval_data and prev_design_eval_data["c_run_out"]["data_execution"]["return_code"] != 0:             
+            if prev_design_eval_data["c_run_out"]["data_execution"]["stderr"] == "":
+                e = "The generated code could not be executed after compiling with traditional C++ compiler.\n"
+                e += f"It seems that stderr is empty and the process returned a non-zero exit code: {prev_design_eval_data['c_run_out']['data_execution']['return_code']}\n"
+                e += "This likely means the process segfaulted or had a critical error.\n"
+                e += "Likely causes include:\n"
+                e += "- Floating point exceptions\n"
+                e += "- Segmentation faults\n"
+                e += "- Memory corruption\n"
+                e += "Please consider fixing the issue and regenerating the corrected code."
+                return e
+            else:
+                error_lines = prev_design_eval_data["c_run_out"]["data_execution"]["stderr"][:1000]
+                return (
+                    f"The generated code could not be executed after compiling with traditional C++ compiler. Please fix the issue and regenerate the corrected code.\nError Message: {error_lines}\n"
+                )
+        
+        if "vitis_hls_tool_out" in prev_design_eval_data:
+            prev_design_syn_data = prev_design_eval_data["vitis_hls_tool_out"]["data_execution"]
+            if prev_design_eval_data["vitis_hls_tool_out"]["data_execution"]["return_code"] != 0:
+                if (
+                    "timeout" in prev_design_syn_data
+                    and prev_design_syn_data["timeout"] is True
+                ):
+                    e = ""
+                    e += "The generated code could not be synthesized with Vitis HLS. Please fix the issue and regenerate the corrected code.\n Also regenerate the updated OptDSLv2 optimization template file `opt_template.tcl` file that matches the corrected kernel structure and defines the proper design space.\n"
+                    e += "Error:\n"
+                    e += "The synthesis process timed out under the user defined timeout limit for HLS synthesis.\n"
+                    e += "This can be due to the way the code is written in combination with specific pragma settings and options that cause HLS scheduling and binding to take an unreasonably long time.\n"
+                    e += "The main cause of this issue is the use of #prgama HLS PIPELINE (with or without II=1) when the code can not be pipelined or has nontrivial loop or carry dependencies.\n"
+                    e += "If this is the case, remove the pragma HLS PIPELINE pragmas and try again.\n"
+                    e += "Consider the following suggestions:\n"
+                    e += "- Manually refactor the code and check pragma settings to improve the parallelism and data locality to reduce the scheduling and binding time of the HLS tool.\n"
+                    e += "- Check for instances that can cause a high II (iteration interval) for code that will be pipelined.\n"
+                    e += "- Avoid naively pipelining code with PIPELINE or PIPELINE II=1, as this can cause a high II if a loop or function body can not be easly pipelined or have nontrivial loop or carry dependencies.\n"
+                    e += "- Check the generated code for any other potential issues that may be causing the synthesis process to take an unreasonably long time.\n"
+                    return e
 
+                synth_log = prev_design_syn_data["stdout"]
+                error_lines = [
+                    line for line in synth_log.split("\n") if line.startswith("ERROR: ")
+                ]
+                return (
+                    "The generated code could not be synthesized with Vitis HLS. Please fix the issue and regenerate the corrected code. \nError Messages:\n"
+                    + "\n".join(error_lines)
+                )
+            else:
+                if prev_design_eval_data["opt_dsl_out"]["return_code"] == 1:
+                    return ("OptDSL Error")
+        return None
+    
     def _prepare_hlsfactory_inputs(
         self,
         design_generated_dir: Path,
@@ -567,7 +592,6 @@ class DesignEvaluator:
                     top_function_name=top_function_name,
                 )
                 eval_data["opt_dsl_out"] = opt_out
-                eval_data["status"] = "Pass" if opt_out.get("return_code", 1) == 0 else "Fail"
             else:
                 eval_data["opt_dsl_out"] = self._opt_dsl_check_only(
                     design_generated_dir=design_generated_dir,
@@ -575,9 +599,10 @@ class DesignEvaluator:
                     eval_id=eval_id,
                     top_function_name=top_function_name,
                 )
-                eval_data["status"] = "Pass" if eval_data["opt_dsl_out"].get("return_code", 1) == 0 else "Fail"
         
         error_message = self._generate_error_message(eval_data)
+        if error_message is None:
+            eval_data["status"] = "Pass"
         eval_data["error_message"] = error_message
         self._serialize_eval_data(eval_id, eval_dir, eval_data)
         final_output_design = Design(design_generated_dir, name=f"{eval_id}")
