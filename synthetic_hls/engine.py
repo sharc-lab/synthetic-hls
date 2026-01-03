@@ -145,16 +145,15 @@ class FeedbackDesignLoop:
                        
                         if target == "pareto_scores":
                             # Select best design based on pareto scores; different logic if running Vivado implementation or not
+                            candidates.remove((best_dir, best_val_1))
                             if self.evaluator.run_vivado_impl:
-                                if (luts_ps == 1.0 and ffs_ps == 1.0) and len(candidates) > 1 and num_tries < 3:
-                                    candidates.remove((best_dir, best_val_1))
+                                if (luts_ps == 1.0 and ffs_ps == 1.0) and len(candidates) > 0 and num_tries < 3:                                   
                                     best_dir, best_val_1 = random.choice(candidates)
                                     best_design = Design(best_dir, name=best_dir.name)
                                     continue
                             else:
-                                if len(candidates) > 1:
-                                    candidates_final.append((best_dir, best_val_1, luts_ps, ffs_ps))
-                                    candidates.remove((best_dir, best_val_1))
+                                candidates_final.append((best_dir, best_val_1, luts_ps, ffs_ps))
+                                if len(candidates) > 0:
                                     best_dir, best_val_1 = random.choice(candidates)
                                     best_design = Design(best_dir, name=best_dir.name)
                                     continue
