@@ -186,8 +186,8 @@ The generated `opt_template.tcl` file should:
 - Ensure the design space has a balanced spread of performance vs. resource trade-offs.
 - Ensure the consistency of factor lists across directives in the same group.
 - Keep the total number of configurations within bounds for tractable exploration:  
-  64 ≤ TOTAL < 4096 using the counting rules above. If your estimated TOTAL exceeds 4096, reduce factor-list lengths, the number of ungrouped directives, or the number of `optional=True` pipelines. If below 64, add an ungrouped knob or extend a factor list.
-
+  - 64 <= TOTAL < 4096 using the counting rules above. If your estimated TOTAL exceeds 4096, reduce factor-list lengths, the number of ungrouped directives, or the number of `optional=True` pipelines. If below 64, add an ungrouped knob or extend a factor list.
+  - You MUST estimate TOTAL using the counting rules above and ensure it falls within the bound.
     """
 ).strip()
 

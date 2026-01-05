@@ -1,4 +1,5 @@
 import os
+import io
 import shutil
 import json
 import zipfile
@@ -285,7 +286,7 @@ class HLSFactoryFlow:
                     synthesis=synth_meta,
                     implementation=None,
                     execution=None,
-                    artifacts=None,
+                    artifacts=io.BytesIO(b""),
                 )
                 data.append(d)
 
