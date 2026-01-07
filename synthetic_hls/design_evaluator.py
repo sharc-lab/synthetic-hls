@@ -214,24 +214,23 @@ class DesignEvaluator:
         Runs full HLSFactory flow (sample + analyze) for a prepared design.
         Returns (opt_dsl_out_dict, output_design_dir).
         """
-        output_design_dir, work_dir, design_hlsfactory_flow, _kernel = self._prepare_hlsfactory_inputs(
-            design_generated_dir, eval_dir_top, eval_design_id, top_function_name
-        )
-
-        # Validate OptDSL
-        opt_dsl_error, opt_dsl_error_message = design_hlsfactory_flow.opt_dsl_check()
-        opt_dsl_out = {
-            "return_code": 1 if opt_dsl_error else 0,
-            "error": opt_dsl_error_message if opt_dsl_error else None,
-            "pareto_scores": {}
-        }
-        if opt_dsl_error:
-            shutil.rmtree(output_design_dir.parent, ignore_errors=True)
-            shutil.rmtree(work_dir, ignore_errors=True)
-            return opt_dsl_out, output_design_dir
-
-        # Full exploration + analysis under lock
         with DesignEvaluator.FULL_FLOW_LOCK:
+            output_design_dir, work_dir, design_hlsfactory_flow, _kernel = self._prepare_hlsfactory_inputs(
+                design_generated_dir, eval_dir_top, eval_design_id, top_function_name
+            )
+
+            # Validate OptDSL
+            opt_dsl_error, opt_dsl_error_message = design_hlsfactory_flow.opt_dsl_check()
+            opt_dsl_out = {
+                "return_code": 1 if opt_dsl_error else 0,
+                "error": opt_dsl_error_message if opt_dsl_error else None,
+                "pareto_scores": {}
+            }
+            if opt_dsl_error:
+                shutil.rmtree(output_design_dir.parent, ignore_errors=True)
+                shutil.rmtree(work_dir, ignore_errors=True)
+                return opt_dsl_out, output_design_dir
+
             print(f"[{eval_id}] Running full HLSFactory flow...")
             design_hlsfactory_flow.run()
             design_hlsfactory_flow.analyze(
