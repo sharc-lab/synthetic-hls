@@ -28,11 +28,7 @@ from hlsfactory.framework import (
 )
 from hlsfactory.opt_dsl_frontend_v2 import OptDSLFrontend
 from hlsfactory.opt_dsl_v2.opt_dsl import OptDSL
-from hlsfactory.utils import (
-    ToolPathsSource,
-    get_tool_paths,
-    remove_and_make_new_dir_if_exists,
-)
+from hlsfactory.utils import remove_and_make_new_dir_if_exists
 from hlsfactory.data_packaging import DataAggregatorXilinx, CompleteHLSData
 
 class ASTAnalyzer:
@@ -253,6 +249,8 @@ class HLSFactoryFlow:
         self,
         design_dir: Path,
         work_dir: Path,
+        vitis_hls_dir: Path,
+        vivado_dir: Path,
         n_random_samples: int = 64,
         random_sample_seed: int = 64,
         n_jobs: int = 8,
@@ -261,7 +259,8 @@ class HLSFactoryFlow:
         self.design_dir = design_dir
         self.dataset_dir = design_dir.parent
         self.work_dir = work_dir
-        self.vitis_hls_dir, self.vivado_dir = get_tool_paths(tool_paths_source=ToolPathsSource.ENVFILE)
+        self.vitis_hls_dir = vitis_hls_dir
+        self.vivado_dir = vivado_dir
         self.vitis_hls_bin = self.vitis_hls_dir / "bin" / "vitis_hls"
         self.vivado_bin = self.vivado_dir / "bin" / "vivado"
         self.n_random_samples = n_random_samples
@@ -403,10 +402,9 @@ class HLSFactoryFlow:
         designs = DesignDataset.from_dir(
             dataset_name,
             self.dataset_dir,
-        ).copy_dataset(self.work_dir)
+        )
         datasets[dataset_name] = designs
 
-        TIMEOUT_FRONTEND = 60.0 * 8
         opt_dsl_frontend = OptDSLFrontend(
             self.work_dir,
             random_sample=True,
@@ -422,12 +420,11 @@ class HLSFactoryFlow:
                 lambda x: f"{x}__post_frontend",
                 n_jobs=self.n_jobs,
                 cpu_affinity=list(range(self.n_jobs)),
-                timeout=TIMEOUT_FRONTEND,
             )
         )
 
         TIMEOUT_HLS_SYNTH = 60.0 * 16 
-        TIMEOUT_HLS_IMPL = 60.0 * 45 # 90 mins originally
+        TIMEOUT_HLS_IMPL = 60.0 * 45
 
         toolflow_vitis_hls_synth = VitisHLSSynthFlow(
             vitis_hls_bin=str(self.vitis_hls_bin),

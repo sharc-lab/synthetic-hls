@@ -58,16 +58,18 @@ class DesignEvaluator:
     FULL_FLOW_LOCK = threading.Lock()
     def __init__(
         self,
-        vitis_hls_tool_csim: VitisHLSCSimTool,
-        vitis_hls_tool_synth: VitisHLSSynthTool,
+        vitis_hls_dir: Path,
+        vivado_dir: Path,
         temperature: float = 0.7,
         clang_path: Optional[Path] = None,
         include_paths: Optional[List[Path]] = None,
         run_vivado_impl: bool = True,
         n_jobs_hlsfactory: int = 24
     ) -> None:
-        self.cpp_compiler_tool = vitis_hls_tool_csim
-        self.vitis_hls_tool = vitis_hls_tool_synth
+        self.vitis_hls_dir = vitis_hls_dir
+        self.vivado_dir = vivado_dir
+        self.cpp_compiler_tool = VitisHLSCSimTool(vitis_hls_dir)
+        self.vitis_hls_tool = VitisHLSSynthTool(vitis_hls_dir)
         self.template_files_path = Path(__file__).resolve().parent / "tcl_templates"
         self.temperature = temperature
         self.clang_path = clang_path
@@ -193,6 +195,8 @@ class DesignEvaluator:
         
         # Initialize HLSFactoryFlow
         design_hlsfactory_flow = HLSFactoryFlow(
+            vitis_hls_dir=self.vitis_hls_dir,
+            vivado_dir=self.vivado_dir,
             design_dir=output_design_dir,
             work_dir=work_dir,
             n_random_samples=64,
@@ -292,6 +296,8 @@ class DesignEvaluator:
         eval_data: dict[str, Any] = {}
 
         eval_id = f"{design_id}__{model_name_normalized}"
+        eval_data["kernel_name"] = None
+        kernel_name = None
         eval_data["eval_type"] = "hls_gen_zero_shot"
         eval_data["eval_id"] = eval_id
         eval_data["status"] = "Fail"
@@ -401,8 +407,10 @@ class DesignEvaluator:
         eval_data["llm_execution_time"] = {"t0": t0, "t1": t1, "execution_time": dt}
 
         if model_timeout or prompt_too_long:
+            error_message = "Model timeout" if model_timeout else "Prompt too long"
+            eval_data["error_message"] = error_message
             self._serialize_eval_data(eval_id, eval_dir, eval_data)
-            return "ModelTimeout" if model_timeout else "PromptTooLong", None
+            return error_message, None
 
         assert r is not None
         assert r_text is not None
@@ -455,9 +463,11 @@ class DesignEvaluator:
             eval_data["can_parse_output"] = True
         except Exception:
             print(f"[{eval_id}] Error extracting code from LLM output")
+            error_message = "ParseError"
+            eval_data["error_message"] = error_message
             eval_data["can_parse_output"] = False
             self._serialize_eval_data(eval_id, eval_dir, eval_data)
-            return "ParseError", None
+            return error_message, None
 
         design_generated_dir: Path = eval_dir / "design_generated"
         design_generated_dir.mkdir()
@@ -469,6 +479,9 @@ class DesignEvaluator:
                     f.unlink()
 
         for file_name, code in generated_code.items():
+            if file_name.endswith(".h"):
+                kernel_name = Path(file_name).stem
+                eval_data["kernel_name"] = kernel_name
             (design_generated_dir / f"{file_name}").write_text(code)
 
         build_dir = eval_dir / "build"
@@ -566,7 +579,6 @@ class DesignEvaluator:
         eval_data["opt_dsl_out"]["error"] = None
         eval_data["opt_dsl_out"]["pareto_scores"] = {}
         if vitis_hls_tool_output.data_execution.return_code == 0:
-            kernel_name = (next(design_generated_dir.glob("*.h"), None)).stem
             output_design_dir = eval_dir_top / "output_designs" / eval_id / kernel_name
 
             for f in design_generated_dir.glob("*.cpp"):

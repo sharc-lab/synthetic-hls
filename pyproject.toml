@@ -3,11 +3,26 @@ name = "synthetic-hls"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "llm>=0.27.1",
     "llm-openrouter>=0.4.1",
-    "matplotlib>=3.10.5",
+    "matplotlib>=3.10.8",
     "psutil>=7.0.0",
-    "joblib>=1.3.0",
+    "python-dotenv>=1.2.1",
+    "numpy>=2.4.0",
+    "pandas>=2.3.3",
+    "joblib>=1.4.2",
+    "hlsfactory @ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2",
 ]
+
+[tool.setuptools]
+packages = { find = { include = ["synthetic_hls*"] } }
+
+# Include templates inside synthetic_hls
+[tool.setuptools.package-data]
+synthetic_hls = ["tcl_templates/*.tcl"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

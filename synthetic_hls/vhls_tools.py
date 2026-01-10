@@ -32,6 +32,12 @@ def auto_find_vitis_hls_dir() -> Path | None:
     vitis_hls_dist_path = vitis_hls_bin_path.parent.parent
     return vitis_hls_dist_path
 
+def auto_find_vivado_dir() -> Path | None:
+    vivado_bin_path = auto_find_bin("vivado")
+    if vivado_bin_path is None:
+        return None
+    vivado_dist_path = vivado_bin_path.parent.parent
+    return vivado_dist_path
 
 def auto_find_vitis_hls_bin() -> Path | None:
     vitis_hls_dir = auto_find_vitis_hls_dir()

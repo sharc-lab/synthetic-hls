@@ -6,8 +6,9 @@ from typing import Any, Dict
 
 from synthetic_hls.design import Design
 from synthetic_hls.prompts import (
-    PROMPT_PRE,
+    DOMAINS,
     COMPLEXITY_TARGETS,
+    PROMPT_PRE,
     PROMPT_GEN_OPTDSL_V2,
     PROMPT_GEN_NO_INPUT_WITH_OPT,
     PROMPT_GEN_SINGLE_INPUT_WITH_OPT,
@@ -92,11 +93,19 @@ Only output the generated HLS code in the XML format and nothing else.
 """).strip()
 
 
-def build_prompt_gen_zero_shot_no_input_with_opt() -> str:
+def build_prompt_gen_zero_shot_no_input_with_opt(
+    domain: str,
+) -> str:
     """Build prompt for generating design from scratch."""
     p = PROMPT_PRE
     p += "\n\n"
-    p += PROMPT_GEN_NO_INPUT_WITH_OPT
+    domain_category = DOMAINS[domain]["name"]
+    domain_focus_areas = "\n".join([f"  - {x}" for x in DOMAINS[domain]["focuses"]])
+    prompt_template = Template(PROMPT_GEN_NO_INPUT_WITH_OPT)
+    p += prompt_template.substitute(
+        domain_category=domain_category,
+        domain_focus_areas=domain_focus_areas,
+    )
     p += "\n\n"
     p += OUTPUT_FORMAT_GEN_WITH_OPT_XML
     p += "\n\n"

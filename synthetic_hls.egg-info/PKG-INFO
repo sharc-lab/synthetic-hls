@@ -1,0 +1,50 @@
+Metadata-Version: 2.4
+Name: synthetic-hls
+Version: 0.1.0
+Summary: Add your description here
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: llm>=0.27.1
+Requires-Dist: llm-openrouter>=0.4.1
+Requires-Dist: matplotlib>=3.10.8
+Requires-Dist: psutil>=7.0.0
+Requires-Dist: python-dotenv>=1.2.1
+Requires-Dist: numpy>=2.4.0
+Requires-Dist: pandas>=2.3.3
+Requires-Dist: joblib>=1.4.2
+Requires-Dist: hlsfactory@ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
+Dynamic: license-file
+
+# SyntheticHLS: Building Complex Application-Level Synthetic HLS Design Datasets using LLMs
+
+## Setup
+### HLSFactory Version
+SyntheticHLS **requires an HLSFactory version that fully supports OptDSLv2**.  
+Please ensure the installed HLSFactory includes:
+- OptDSLv2 frontend
+- **OptDSLv2 validation logic** (currently available in the `mzhou_OptDSLv2` branch of HLSFactory, not yet merged into the main branch)
+### Environment Variables
+SyntheticHLS needs environment variables for tool paths and model access.  
+Please refer to **template.env** under example experiment folders for a complete example configuration.
+### Vitis HLS Version
+SyntheticHLS has been tested with **Vitis HLS 2023.1**. Other versions may work but are still under test.
+### Experiments
+Example experiment scripts are provided under experiments/, including single-target and multi-targets experiments. The analysis and visualization example scripts are included under the same directory.
+Each experiment produces a self-contained workspace with intermediate artifacts and summary JSON file.
+
+## About
+This repository contains the work-in-progress code, dataset, and evaluation results for SyntheticHLS, a framework for generating diverse, synthesizable synthetic HLS datasets using Large Language Models (LLMs).
+
+Key contributions:
+
+- **Design Diversity Metrics**: Structural complexity, design space size, and dataflow diversity.
+- **Parameterized Designs**: Generate HLS source + design space specs to expand into multiple implementations.
+- **Iterative Feedback Loop**: Incrementally transform seed designs into complex, application-level datasets.
+
+
+If you use this work, please cite:
+
+```txt
+@inproceedings{}
+```

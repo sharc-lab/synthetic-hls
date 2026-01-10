@@ -1,0 +1,9 @@
+llm>=0.27.1
+llm-openrouter>=0.4.1
+matplotlib>=3.10.8
+psutil>=7.0.0
+python-dotenv>=1.2.1
+numpy>=2.4.0
+pandas>=2.3.3
+joblib>=1.4.2
+hlsfactory@ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
