@@ -115,7 +115,7 @@ engine.run(
     n_feedback_iterations=n_feedback_iterations,
     n_seed_designs=n_seed_designs,
     n_samples=n_samples,
-    n_jobs_design=36,
+    n_jobs_design=48,
     n_jobs_hlsfactory=24,
     fix=True,
     run_vivado_impl=False
