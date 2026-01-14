@@ -377,12 +377,12 @@ class HLSFactoryFlow:
         with open(design_dir / "pareto_scores.txt", "a") as f: 
             if len(designs) == 0:
                 for resource_name in resource_map.keys():
-                        all_summary[f"{resource_name}_vs_latency"] = {
-                            "pareto_score": None,
-                            "n_points": 0,
-                            "n_pareto_frontier_points": 0,
-                        }
-                        f.write(f"pareto_score_{resource_name}_vs_latency = {None}\n")
+                    all_summary[f"{resource_name}_vs_latency"] = {
+                        "pareto_score": None,
+                        "n_points": 0,
+                        "n_pareto_frontier_points": 0,
+                    }
+                    f.write(f"pareto_score_{resource_name}_vs_latency = {None}\n")
             else:
                 data_all = self.package_designs(designs, output_dir, dataset_name)
                 for resource_name, resource_column in resource_map.items():
