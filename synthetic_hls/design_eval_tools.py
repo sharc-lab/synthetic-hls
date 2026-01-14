@@ -360,8 +360,7 @@ class HLSFactoryFlow:
         dataset_name = self.dataset_dir.name
         dataset = DesignDataset.from_dir(dataset_name, self.work_dir / f"{dataset_name}__post_frontend" )
         designs = dataset.designs
-        data_all = self.package_designs(designs, output_dir, dataset_name)
-
+        
         if self.run_vivado_impl:  
             resource_map = {
                 "LUTs": "implementation__utilization__Total LUTs",
@@ -374,13 +373,24 @@ class HLSFactoryFlow:
             }
 
         all_summary = {}
-        with open(design_dir / "pareto_scores.txt", "a") as f:
-            for resource_name, resource_column in resource_map.items():
-                pareto_delta_score, current_summary = self.delta_gap_based(
-                    data_all, resource_column, "synthesis__latency_average_cycles"
-                )
-                all_summary[f"{resource_name}_vs_latency"] = current_summary
-                f.write(f"pareto_score_{resource_name}_vs_latency = {pareto_delta_score}\n")
+
+        with open(design_dir / "pareto_scores.txt", "a") as f: 
+            if len(designs) == 0:
+                for resource_name in resource_map.keys():
+                        all_summary[f"{resource_name}_vs_latency"] = {
+                            "pareto_score": None,
+                            "n_points": 0,
+                            "n_pareto_frontier_points": 0,
+                        }
+                        f.write(f"pareto_score_{resource_name}_vs_latency = {None}\n")
+            else:
+                data_all = self.package_designs(designs, output_dir, dataset_name)
+                for resource_name, resource_column in resource_map.items():
+                    pareto_delta_score, current_summary = self.delta_gap_based(
+                        data_all, resource_column, "synthesis__latency_average_cycles"
+                    )
+                    all_summary[f"{resource_name}_vs_latency"] = current_summary
+                    f.write(f"pareto_score_{resource_name}_vs_latency = {pareto_delta_score}\n")
 
         with open(design_dir / "pareto_scores_summary.json", "w") as jf:
             json.dump(all_summary, jf, indent=4)
@@ -405,6 +415,8 @@ class HLSFactoryFlow:
         )
         datasets[dataset_name] = designs
 
+        TIMEOUT_OPT_DSL_FRONTEND = 60.0
+
         opt_dsl_frontend = OptDSLFrontend(
             self.work_dir,
             random_sample=True,
@@ -420,6 +432,7 @@ class HLSFactoryFlow:
                 lambda x: f"{x}__post_frontend",
                 n_jobs=self.n_jobs,
                 cpu_affinity=list(range(self.n_jobs)),
+                timeout=TIMEOUT_OPT_DSL_FRONTEND,
             )
         )
 
