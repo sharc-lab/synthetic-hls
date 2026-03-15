@@ -144,7 +144,6 @@ The task will center around high-level synthesis (HLS) code written in C++ for a
 """
 ).strip()
 
-
 PROMPT_SCALABILITY_EXPLANATION = dedent(
     """
  ### What "well-scalable" means:
@@ -157,7 +156,6 @@ Latency sensitivity requirement: The design must show material latency variation
     Bottleneck audit (design-time): Identify the loop(s)/stage(s) that dominate cycles and explain how `pipeline II`, `unroll`, memory parallelism (`array_partition`/tiling), and optional work paths will change the critical path cycles.
 """
 ).strip()
-
 
 PROMPT_GENERAL_REQUIREMENTS = dedent(
     """
@@ -175,11 +173,29 @@ PROMPT_GENERAL_REQUIREMENTS = dedent(
 ### Code Format and Synthesizability Requirements:
 - DO NOT add any comments to any of the generated files (`.cpp`, `.h`, `_tb.cpp`, `opt_template.tcl`, `hls_eval_config.toml`).
 - All generated code must be clean, syntactically correct, and self-contained without any inline or block comments. The only textual explanation should be in `kernel_description.md`.
-- The design must be synthesizable, well-scalable, and modular, supporting clean hierarchy, sub-functions, templates, or structs where appropriate.
+- The design must be synthesizable and modular, supporting clean hierarchy, sub-functions, templates, or structs where appropriate.
 - All loops must have static bounds analyzable by synthesis tools. Avoid dynamic memory, recursion, or unbounded loops.
 - All `for` loops in the kernel must be clearly labeled using the syntax `<label>: for (...)`, where the label is unique and descriptive. Do not leave any loop unlabeled.
-- DO NOT add any performance optimization pragmas such as `pipeline`, `unroll`, `array_partition`, `inline`, or similar in the kernel implementation file. The only pragma you are allowed to use is `#pragma HLS top name=...` to define the kernel top function.
-
+- The ONLY HLS pragmas allowed in the kernel implementation file are:
+  - `#pragma HLS top name=<top_function>` to define the kernel top function (required, inside the top-level function body)
+  - `#pragma HLS DATAFLOW` (optional, inside the top-level function body, only if you implement a correct stream/buffer pipeline)
+  - `#pragma HLS STREAM variable=<stream_var> depth=<N>` (optional, in function scope, only for `hls::stream` variables)
+- DO NOT add any other `#pragma HLS` directives such as `pipeline`, `unroll`, `array_partition`, `inline`, or similar.
+- The `#pragma HLS top name=<top_function>` MUST appear INSIDE the top-level function body, as the first statement. DO NOT place `#pragma HLS ...` at global/file scope, in headers, or above the function signature.
+  - Correct:
+    ```
+    void <top_function>(...) {
+        #pragma HLS top name=<top_function>
+        ...
+    }
+    ```
+  - Incorrect:
+    ```
+    #pragma HLS top name=<top_function>
+    void <top_function>(...) {
+        ...
+    }
+    ```
     """
 ).strip()
 
@@ -190,13 +206,17 @@ PROMPT_OPTDSL_V2_REQUIREMENTS = dedent(
 - You should update the OptDSLv2 file to match the new kernel structure.
 - The OptDSLv2 format replaces TCL directives with a structured Python-like DSL that expresses HLS directives such as `pipeline`, `unroll`, and `partition`.
 
-#### OptDSL Format Compliance Requirement:
+#### OptDSLv2 Format Compliance Requirement:
 You must follow the format, directive structure, and example configurations exactly as provided below. 
 - DO NOT invent new directive types, modify argument order, or change syntax.
 - DO NOT reformat the grouping logic or factor list structure.
 - Do NOT omit any bracket or comma. This is required syntax.
     - Correct: `partition("array_name", "kernel", "cyclic", [1, 2, 4, 8], 1, "group_name")`
     - Incorrect: `partition "array_name" "kernel" "cyclic" [1, 2, 4, 8] 1 "group_name"` or `partition("array_name", "kernel", "cyclic", 1 2 4 8, 1, "group_name")`
+- Do NOT add any additional indentation before or after each directive line.
+    - Correct: `partition("array_name", "kernel", "cyclic", [1, 2, 4, 8], 1, "group_name")`
+    - Incorrect (extra indentation before): ` partition("array_name", "kernel", "cyclic", [1, 2, 4, 8], 1, "group_name")`
+    - Incorrect (extra indentation after): `partition("array_name", "kernel", "cyclic", [1, 2, 4, 8], 1, "group_name") `
 - Commenting rule: Inline/end-of-line comments on the same line as a directive are not allowed. Comments must be on their own line.
     - Correct:  
       `# optional pipeline for outer loop`  
@@ -339,7 +359,7 @@ PROMPT_GEN_NO_INPUT_WITH_OPT = dedent(
     f"""
 ## Task Description
 Your task is to:
-1. Design and implement a new HLS design as a well-scalable, high-complexity, multi-stage, application-level HLS-compatible C++ kernel in one chosen application domain.
+1. Design and implement a new seed HLS design as an application-oriented, synthesizable and HLS-compatible C++ kernel in one chosen application domain.
 2. Write a matching C++ header file for the design.
 3. Create a testbench that can validate the functionality of the design.
 4. Output the name of the top-level function in a file named `top.txt`.
@@ -347,7 +367,21 @@ Your task is to:
 6. Generate an OptDSLv2 optimization template file named `opt_template.tcl` to enable design space exploration for the kernel implementation file only. The testbench file is not relevant for optimization and should not be considered.
 7. Write a toml file named `hls_eval_config.toml` whose entire contents is exactly: `tags = ["llm_gen"]`.
 
-{PROMPT_SCALABILITY_EXPLANATION}
+SEED OBJECTIVE (highest priority):
+- Maximize pass rate: the generated seed HLS design MUST compile, run in C simulation, and synthesize in Vitis HLS reliably.
+- Keep the seed design moderate (not minimal), and leave "very high complexity" to later feedback iterations.
+
+Do it step by step:
+  1) Read and understand the constraints and requirements below.
+  2) Identify the domain and the focus area, and select a specific application or use case within it.
+  3) Draft the kernel specification (I/O, constants, stage breakdown, loop bounds).
+  4) Write all the code and required files 
+  5) Internally preflight (pass/fail) before output: 
+     - exact signature match across files; 
+     - HLS-safe C++ only (no dynamic alloc/std::vector/string/exceptions/recursion); 
+     - fixed-size arrays and labeled static loops; 
+     - stream usage must be balanced (no deadlocks); 
+     - testbench must compute golden ref and assert; 
 
 ### Application Domain Constraint:
 You MUST generate the design strictly within the following chosen application domain:
@@ -371,7 +405,7 @@ Domain enforcement rules:
 ### Architecture Requirements:
 - You must build a full, multi-stage application accelerator, not just a reusable module. It should involve multiple sub-functions or kernels, realistic data access and compute dependencies, and ideally feature both compute-intensive and logic-driven stages.
 - Your generated design must not be limited to simple filters, matrix operations, or textbook-style kernels.
-- You are encouraged to model your generated design as a complete pipeline, integrating at least 6 sub-functions or logical modules that reflect realistic data flow, memory usage, control logic, and computational diversity. 
+- You are encouraged to model your generated design as a complete pipeline, integrating at least 4 sub-functions or logical modules that reflect realistic data flow, memory usage, control logic, and computational diversity. 
 - Each design should serve a clear, self-contained purpose within a real-world scenario. 
 - Examples of stage types:
   - Sensor ingestion / buffering
@@ -380,13 +414,14 @@ Domain enforcement rules:
   - Control decision / scheduling logic
   - Post-processing or response generation
 
-### Dataflow Requirements:
-The generated designs are strongly encouraged to include various forms of dataflow between stages, such as:
-- Streamed producer-consumer connections (`hls::stream`) for pipelined handshaking.
-- Sequential buffer-based transfers for time-phased computation.
-- Parallel or partially overlapped execution between compute modules.
-- Staged processing where each sub-function performs a distinct transformation or decision before passing results onward.
-Each design should exhibit visible data movement patterns that can be analyzed by synthesis tools, enabling directive-driven exploration of throughput, II, and resource utilization trade-offs.
+### Dataflow Requirements
+The generated designs MAY include various forms of dataflow between stages, but ALWAYS prioritize pass rate.
+- You MAY use `hls::stream` for several stage connections only if ALL are true:
+  - Fixed-count protocol: the number of writes and reads is compile-time fixed.
+  - Balanced I/O: total number of writes == total number of reads for each stream.
+  - No polling: do NOT use `empty()`, `full()`, or while-loops around stream ops.
+  - Single producer and single consumer per stream (no fan-in/fan-out).
+If you are not fully confident that the stream protocol is correct, do NOT use streams-use buffers.
 
 {PROMPT_OPTDSL_V2_REQUIREMENTS}
 
