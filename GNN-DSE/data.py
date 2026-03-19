@@ -45,7 +45,6 @@ FPGA_TOTAL_RESOURCES = {
     "BRAM": 1824,
 }
 
-
 class MyOwnDataset(Dataset):
     def __init__(self, transform=None, pre_transform=None, data_files=None):
         super(MyOwnDataset, self).__init__(SAVE_DIR, transform, pre_transform)
@@ -60,7 +59,8 @@ class MyOwnDataset(Dataset):
     def processed_file_names(self):
         if hasattr(self, "data_files"):
             return self.data_files
-        return glob(join(SAVE_DIR, "*.pt"))
+        return sorted(glob(join(SAVE_DIR, "*.pt")))
+        # return glob(join(SAVE_DIR, "*.pt"))
 
     def download(self):
         pass
@@ -150,7 +150,8 @@ def _parse_kernel_list(val):
 
 
 def get_kernel_samples(dataset: 'MyOwnDataset'):
-    """Return a dataset filtered to a subset of kernels.
+    """
+    Return a dataset filtered to a subset of kernels.
     """
     wanted = _parse_kernel_list(getattr(FLAGS, 'test_kernels', None))
 
@@ -174,7 +175,6 @@ def get_kernel_samples(dataset: 'MyOwnDataset'):
         saver.log_info(f"[get_kernel_samples] selected kernels={wanted}, graphs={len(selected)}")
         return MyOwnDataset(data_files=selected)
 
-    # fallback: choose the first kernel deterministically (sorted for reproducibility)
     first_kernel = sorted(kernel_to_files.keys())[0]
     selected = kernel_to_files[first_kernel]
     saver.log_info(f"[get_kernel_samples] FLAGS.test_kernels not set; using first kernel='{first_kernel}' graphs={len(selected)}")
@@ -249,7 +249,6 @@ def _encode_edge_torch(edge_dict, enc_ftype, enc_ptype):
     return _coo_to_sparse(X).to_dense()
 
 def _encode_X_dict(g, ntypes=None, ptypes=None, itypes=None, ftypes=None, btypes=None):
-    # [MOD] Ensure node ids are contiguous integers aligned with create_edge_index()
     g = nx.convert_node_labels_to_integers(g, ordering="sorted")
 
     X_ntype, X_ptype, X_numeric = [], [], []
@@ -281,7 +280,7 @@ def _encode_X_dict(g, ntypes=None, ptypes=None, itypes=None, ftypes=None, btypes
         if "pseudo" in text:
             X_pseudonids.append(1)
             neighbor_pragmas = {}
-            # [MOD] node ids are ints now
+
             for nb in g.neighbors(node):
                 tnb = str(g.nodes[nb].get("text", "")).lower()
                 if tnb in ("pipeline", "parallel", "tile"):
@@ -457,11 +456,11 @@ def _map_row_to_targets(row: dict) -> dict:
         norm_method = getattr(FLAGS, "norm_method", "off") or "off"
         out2 = dict(out)
 
-        # ---- No normalization ----
+        # No normalization
         if norm_method in ("off", "logmse"):
             return out2
 
-        # ---- GNN-DSE paper normalization ----
+        # GNN-DSE paper normalization
         if norm_method == "gnndse":
             eps = float(getattr(FLAGS, "epsilon", 1e-3))
             norm_factor = float(getattr(FLAGS, "normalizer", 1e7))
@@ -472,7 +471,6 @@ def _map_row_to_targets(row: dict) -> dict:
             out2["perf"] = float(np.log2(norm_factor / latency))
             out2["actual_perf"] = out2["perf"]
 
-            # resources -> utilization fractions
             lut_tot = float(FPGA_TOTAL_RESOURCES.get("LUT", 1.0))
             ff_tot = float(FPGA_TOTAL_RESOURCES.get("FF", 1.0))
             dsp_tot = float(FPGA_TOTAL_RESOURCES.get("DSP", 1.0))

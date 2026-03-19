@@ -117,13 +117,13 @@ def feature_extract(model, key_word, gnn_layer=None):
         if key_word not in name:
             if not gnn_layer:
                 saver.log_info(f'fixing parameter: {name}')
-                param.requires_grad = False  ## freezes that parameter so it will not be updated in the backpropagation
+                param.requires_grad = False
             else:
                 if 'conv_first' in name or any([f'conv_layers.{d}' in name for d in range(gnn_layer-1)]):
                     saver.log_info(f'fixing parameter: {name}')
                     param.requires_grad = False
 
-    if FLAGS.random_MLP: ## sample code for modifying part of the model architecture
+    if FLAGS.random_MLP:
         D = FLAGS.D
         if D > 64:
             hidden_channels = [D // 2, D // 4, D // 8, D // 16, D // 32]
@@ -194,7 +194,7 @@ def get_train_val_count(num_graphs, val_ratio, test_ratio):
 
     return r1, r2
 
-def inference(dataset, init_pragma_dict=None, model_path=FLAGS.model_path, val_ratio=FLAGS.val_ratio, test_ratio=FLAGS.val_ratio, resample=-1, model_id=0, is_train_set=False, is_val_set=False):
+def inference(dataset, init_pragma_dict=None, model_path=FLAGS.model_path, val_ratio=FLAGS.val_ratio, test_ratio=FLAGS.test_ratio, resample=-1, model_id=0, is_train_set=FLAGS.is_train_set, is_val_set=False):
     dataset_dict = process_split_data(dataset)
     num_graphs = len(dataset_dict['train'])
     r1, r2 = get_train_val_count(num_graphs, val_ratio, test_ratio)
@@ -268,7 +268,7 @@ def set_target_list():
     return target_list, loss_dict
 
 def update_total_loss(loss, data, target_list, loss_dict, loss_dict_, out_dict, total_loss, correct):
-    total_loss += loss.item() # * data.num_graphs
+    total_loss += loss.item()
     for t in target_list:
         loss_dict[t] += loss_dict_[t].item()
     return loss_dict, total_loss
@@ -288,7 +288,7 @@ def update_csv_dict(csv_dict, data, i, target_name, target_value, out_value):
                 l.extend([f'acutal-{target_name}', f'predicted-{target_name}'])
                 csv_dict['header'] = l
 
-def train_main(dataset, pragma_dim = None, val_ratio=FLAGS.val_ratio, test_ratio=FLAGS.val_ratio, resample=-1):
+def train_main(dataset, pragma_dim = None, val_ratio=FLAGS.val_ratio, test_ratio=FLAGS.test_ratio, resample=-1):
     saver.info(f'Reading dataset from {SAVE_DIR}')
 
     dataset_dict = process_split_data(dataset)
@@ -458,7 +458,6 @@ def test(loader, tvt, model, epoch, plot_test = False, test_losses = [-1], csv_d
                         out_value = 2**(out_value) * (1 / FLAGS.normalizer)
 
                     if 'inf' in FLAGS.subtask:
-                        # [MOD] accumulate SSE/count for logmse objective
                         err2 = (out_value - target_value) ** 2
                         sse_by_target[target_name] += float(err2)
                         cnt_by_target[target_name] += 1
@@ -507,7 +506,6 @@ def test(loader, tvt, model, epoch, plot_test = False, test_losses = [-1], csv_d
                     n_all += 1
             inference_loss = (sse / max(n_all, 1)) * len(target_list)
 
-        # return avg "objective-like" score per target (similar to your previous scaling)
         MSE_loss = inference_loss / max(len(target_list), 1)
     else:
         MSE_loss = inference_loss / count_data * len(target_list)

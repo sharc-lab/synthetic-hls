@@ -36,7 +36,6 @@ def _maybe_literal_list(v):
 parser = argparse.ArgumentParser()
 
 parser.add_argument("--task", default="regression")
-# Subtasks: build_dataset / train / inference / rank
 parser.add_argument("--subtask", default="train")
 parser.add_argument("--plot_dse", type=_str2bool, default=False)
 
@@ -52,13 +51,11 @@ parser.add_argument("--targets", default=TARGETS)
 parser.add_argument("--target", default=None)
 parser.add_argument("--min_allowed_latency", type=float, default=100.0)
 parser.add_argument("--epsilon", type=float, default=1e-12)
-parser.add_argument("--normalizer", type=float, default=1e7)  # GNNDSE latency normalization factor
+parser.add_argument("--normalizer", type=float, default=1e7)
 parser.add_argument("--util_normalizer", type=float, default=1.0)
 parser.add_argument("--max_number", type=float, default=1e10)
 
-# Options:
-#   - gnndse: GNNDSE-style labels (util fractions + log latency)
-#   - logmse: keep raw labels; use log(MSE+eps) as optimization objective (model-side)
+# Options: gnndse, logmse
 parser.add_argument("--norm_method", default="gnndse")
 parser.add_argument("--encode_log", type=_str2bool, default=False)
 parser.add_argument("--invalid", type=_str2bool, default=False)
@@ -100,7 +97,9 @@ parser.add_argument("--gnn_layer_after_MLP", type=int, default=1)
 parser.add_argument("--MLP_common_lyr", type=int, default=0)
 
 parser.add_argument("--save_model", type=_str2bool, default=True)
-parser.add_argument("--val_ratio", type=float, default=0.15)
+parser.add_argument("--test_ratio", type=float, default=0.3)
+parser.add_argument("--val_ratio", type=float, default=0)
+parser.add_argument("--is_train_set", type=_str2bool, default=False)
 parser.add_argument("--resample", type=_str2bool, default=False)
 parser.add_argument("--activation", default="elu")
 parser.add_argument("--activation_type", default="elu")
@@ -109,7 +108,7 @@ parser.add_argument("--lr", type=float, default=3e-4)
 parser.add_argument("--weight_decay", type=float, default=1e-4)
 parser.add_argument("--scheduler", default=None)
 parser.add_argument("--warmup", default=None)
-parser.add_argument("--random_seed", type=int, default=123)
+parser.add_argument("--random_seed", type=int, default=456)
 parser.add_argument("--batch_size", type=int, default=32)
 parser.add_argument("--loss", type=str, default="MSE")
 parser.add_argument("--epoch_num", type=int, default=300)
@@ -126,7 +125,7 @@ parser.add_argument("--test_kernels", default=None)
 parser.add_argument("--model_path", default=None)
 parser.add_argument("--topk", type=int, default=50)
 
-parser.add_argument("--dataset", default="polybench_mini")
+parser.add_argument("--dataset", default="polybench_mini-base")
 parser.add_argument("--tag", default="gnndse")
 parser.add_argument("--model_tag", default=None)
 
