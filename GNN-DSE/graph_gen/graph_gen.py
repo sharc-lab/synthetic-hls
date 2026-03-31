@@ -14,7 +14,7 @@ from hlsfactory.framework import (
     DesignDatasetCollection,
     count_total_designs_in_dataset_collection,
 )
-# from hlsfactory.opt_dsl_frontend import OptDSLFrontend
+
 from hlsfactory.opt_dsl_frontend_v2 import OptDSLFrontend
 from hlsfactory.utils import (
     DirSource,
@@ -151,28 +151,30 @@ datasets_post_hls_synth = (
     )
 )
 
-toolflow_vitis_hls_implementation = VitisHLSImplFlow(
-    vitis_hls_bin=str(VITIS_HLS_BIN),
-    env_var_xilinx_hls=str(VITIS_HLS_PATH),
-    env_var_xilinx_vivado=str(VIVADO_PATH),
-)
-datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel(
-    datasets_post_hls_synth,
-    False,
-    n_jobs=N_JOBS,
-    cpu_affinity=CPU_AFFINITY,
-    timeout=TIMEOUT_HLS_IMPL,
-)
+### No implementation for now
 
-toolflow_vitis_hls_impl_report = VitisHLSImplReportFlow(
-    vitis_hls_bin=str(VITIS_HLS_BIN),
-    vivado_bin=str(VIVADO_BIN),
-    env_var_xilinx_hls=str(VITIS_HLS_PATH),
-    env_var_xilinx_vivado=str(VIVADO_PATH),
-)
-toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel(
-    datasets_post_hls_implementation,
-    False,
-    n_jobs=N_JOBS,
-    cpu_affinity=CPU_AFFINITY,
-)
+# toolflow_vitis_hls_implementation = VitisHLSImplFlow(
+#     vitis_hls_bin=str(VITIS_HLS_BIN),
+#     env_var_xilinx_hls=str(VITIS_HLS_PATH),
+#     env_var_xilinx_vivado=str(VIVADO_PATH),
+# )
+# datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel(
+#     datasets_post_hls_synth,
+#     False,
+#     n_jobs=N_JOBS,
+#     cpu_affinity=CPU_AFFINITY,
+#     timeout=TIMEOUT_HLS_IMPL,
+# )
+
+# toolflow_vitis_hls_impl_report = VitisHLSImplReportFlow(
+#     vitis_hls_bin=str(VITIS_HLS_BIN),
+#     vivado_bin=str(VIVADO_BIN),
+#     env_var_xilinx_hls=str(VITIS_HLS_PATH),
+#     env_var_xilinx_vivado=str(VIVADO_PATH),
+# )
+# toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel(
+#     datasets_post_hls_implementation,
+#     False,
+#     n_jobs=N_JOBS,
+#     cpu_affinity=CPU_AFFINITY,
+# )
