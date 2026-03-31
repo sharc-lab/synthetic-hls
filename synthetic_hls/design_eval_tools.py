@@ -31,6 +31,8 @@ from hlsfactory.opt_dsl_v2.opt_dsl import OptDSL
 from hlsfactory.utils import remove_and_make_new_dir_if_exists
 from hlsfactory.data_packaging import DataAggregatorXilinx, CompleteHLSData
 
+from synthetic_hls.pools import EvalThreadPools
+
 class ASTAnalyzer:
     """
     Analyze C/C++ source code using Clang to generate an AST in JSON format, extract:
@@ -251,9 +253,9 @@ class HLSFactoryFlow:
         work_dir: Path,
         vitis_hls_dir: Path,
         vivado_dir: Path,
+        pools: EvalThreadPools,
         n_random_samples: int = 64,
         random_sample_seed: int = 64,
-        n_jobs: int = 8,
         run_vivado_impl: bool = True,
     ):
         self.design_dir = design_dir
@@ -263,9 +265,9 @@ class HLSFactoryFlow:
         self.vivado_dir = vivado_dir
         self.vitis_hls_bin = self.vitis_hls_dir / "bin" / "vitis_hls"
         self.vivado_bin = self.vivado_dir / "bin" / "vivado"
+        self.pools = pools
         self.n_random_samples = n_random_samples
         self.random_sample_seed = random_sample_seed
-        self.n_jobs = n_jobs
         self.run_vivado_impl = run_vivado_impl
 
     def package_designs(self, designs, output_dir, dataset_name):
@@ -273,7 +275,7 @@ class HLSFactoryFlow:
 
         if self.run_vivado_impl:
             # full flow
-            data = xilinx_aggregator.gather_multiple_designs(designs, n_jobs=16)
+            data = xilinx_aggregator.gather_multiple_designs(designs, n_jobs=1)
         else:
             # HLS-only
             data = []
@@ -426,12 +428,11 @@ class HLSFactoryFlow:
         )
 
         datasets_post_frontend = (
-            opt_dsl_frontend.execute_multiple_design_datasets_fine_grained_parallel(
+            opt_dsl_frontend.execute_multiple_design_datasets_fine_grained_parallel__from_thread_pool(
                 datasets,
                 True,
+                self.pools.pool_hlsfactory,
                 lambda x: f"{x}__post_frontend",
-                n_jobs=self.n_jobs,
-                cpu_affinity=list(range(self.n_jobs)),
                 timeout=TIMEOUT_OPT_DSL_FRONTEND,
             )
         )
@@ -445,11 +446,10 @@ class HLSFactoryFlow:
             env_var_xilinx_vivado=str(self.vivado_dir),
         )
         datasets_post_hls_synth = (
-            toolflow_vitis_hls_synth.execute_multiple_design_datasets_fine_grained_parallel(
+            toolflow_vitis_hls_synth.execute_multiple_design_datasets_fine_grained_parallel__from_thread_pool(
                 datasets_post_frontend,
                 False,
-                n_jobs=self.n_jobs,
-                cpu_affinity=list(range(self.n_jobs)),
+                self.pools.pool_synth,
                 timeout=TIMEOUT_HLS_SYNTH,
             )
         )
@@ -460,11 +460,10 @@ class HLSFactoryFlow:
                 env_var_xilinx_hls=str(self.vitis_hls_dir),
                 env_var_xilinx_vivado=str(self.vivado_dir),
             )
-            datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel(
+            datasets_post_hls_implementation = toolflow_vitis_hls_implementation.execute_multiple_design_datasets_fine_grained_parallel__from_thread_pool(
                 datasets_post_hls_synth,
                 False,
-                n_jobs=self.n_jobs,
-                cpu_affinity=range(self.n_jobs),
+                self.pools.pool_synth,
                 timeout=TIMEOUT_HLS_IMPL,
             )
 
@@ -475,9 +474,8 @@ class HLSFactoryFlow:
                 env_var_xilinx_hls=str(self.vitis_hls_dir),
                 env_var_xilinx_vivado=str(self.vivado_dir),
             )
-            toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel(
+            toolflow_vitis_hls_impl_report.execute_multiple_design_datasets_fine_grained_parallel__from_thread_pool(
                 datasets_post_hls_implementation if self.run_vivado_impl else datasets_post_hls_synth,
                 False,
-                n_jobs=self.n_jobs,
-                cpu_affinity=range(self.n_jobs),
+                self.pools.pool_synth
             )

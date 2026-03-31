@@ -73,31 +73,19 @@ available_domains = {
 # -----------------------------------------------------------------------------
 
 domain_list = [
-    "ml_ai",
     "sci_sim",
-    "fin_model",
-    "eng_sim",
-    "data_big",
-    "gfx_render",
-    "crypto_bc",
-    "telecom_sp",
-    "astro",
-    "health_med",
 ]
 assert all(d in available_domains for d in domain_list), (
     "All domains in domain_list must be keys in available_domains."
 )
 
 target_list = [
-    "num_functions",
-    "max_call_chain_depth",
-    "average_function_lines",
     "pareto_scores",
 ]
-n_feedback_iterations = [2, 2, 2, 3]
+n_feedback_iterations = [2]
 
-n_seed_designs = 16
-n_samples = 8
+n_seed_designs = 4
+n_samples = 4
 
 run_name = f"run__{datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 target_plan = ", ".join(

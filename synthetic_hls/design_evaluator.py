@@ -16,55 +16,25 @@ from synthetic_hls.design import Design
 from synthetic_hls.llm_models import Model, normalize_model_name
 from synthetic_hls.prompting import approx_num_tokens, extract_code_xml_from_llm_output
 from synthetic_hls.design_eval_tools import ASTAnalyzer, HLSFactoryFlow
-
+from synthetic_hls.pools import EvalThreadPools
 from hlsfactory.utils import remove_and_make_new_dir_if_exists
 
-class EvalThreadPools:
-    def __init__(
-        self,
-        n_jobs_pool_llm: int,
-        n_jobs_pool_csim: int,
-        n_jobs_pool_synth: int,
-        tokens_per_minute: int | None = None,
-        requests_per_minute: int | None = None,
-    ) -> None:
-        self.n_jobs_pool_llm = n_jobs_pool_llm
-        self.n_jobs_pool_csim = n_jobs_pool_csim
-        self.n_jobs_pool_synth = n_jobs_pool_synth
-
-        self.tokens_per_minute = tokens_per_minute
-        self.requests_per_minute = requests_per_minute
-
-        if n_jobs_pool_llm <= 1:
-            raise ValueError("n_jobs_pool_llm must be greater than 1")
-        if n_jobs_pool_csim <= 1:
-            raise ValueError("n_jobs_pool_csim must be greater than 1")
-        if n_jobs_pool_synth <= 1:
-            raise ValueError("n_jobs_pool_synth must be greater than 1")
-
-        self.pool_llm = ThreadPoolExecutor(max_workers=n_jobs_pool_llm)
-        self.pool_csim = ThreadPoolExecutor(max_workers=n_jobs_pool_csim)
-        self.pool_synth = ThreadPoolExecutor(max_workers=n_jobs_pool_synth)
-
-    def shutdown(self):
-        self.pool_llm.shutdown(wait=True)
-        self.pool_csim.shutdown(wait=True)
-        self.pool_synth.shutdown(wait=True)
 
 class DesignEvaluator:
     """
     Generate designs using LLM, evaluate them using Vitis HLS toolflow, AST analyzer and HLSFactory flow.
     """
     FULL_FLOW_LOCK = threading.Lock()
+    FULL_FLOW_SEM = threading.Semaphore(4)
     def __init__(
         self,
         vitis_hls_dir: Path,
         vivado_dir: Path,
+        pools: EvalThreadPools,
         temperature: float = 0.7,
         clang_path: Optional[Path] = None,
         include_paths: Optional[List[Path]] = None,
         run_vivado_impl: bool = True,
-        n_jobs_hlsfactory: int = 24
     ) -> None:
         self.vitis_hls_dir = vitis_hls_dir
         self.vivado_dir = vivado_dir
@@ -76,8 +46,9 @@ class DesignEvaluator:
         self.include_paths = include_paths
         self.logger = logging.getLogger(__name__)
         self.run_vivado_impl = run_vivado_impl
-        self.n_jobs_hlsfactory = n_jobs_hlsfactory
-
+        # self.n_jobs_hlsfactory = n_jobs_hlsfactory
+        self.pools = pools
+        
     def _serialize_eval_data(self, eval_id: str, eval_output_dir: Path, single_eval_data: dict):
         print(f"[{eval_id}] Saving eval data to json...")
         single_eval_data_json = json.dumps(single_eval_data, indent=4)
@@ -201,7 +172,7 @@ class DesignEvaluator:
             work_dir=work_dir,
             n_random_samples=64,
             random_sample_seed=64,
-            n_jobs=self.n_jobs_hlsfactory,
+            pools=self.pools,
             run_vivado_impl=self.run_vivado_impl,
         )
         return output_design_dir, work_dir, design_hlsfactory_flow, kernel_name
@@ -218,7 +189,8 @@ class DesignEvaluator:
         Runs full HLSFactory flow (sample + analyze) for a prepared design.
         Returns (opt_dsl_out_dict, output_design_dir).
         """
-        with DesignEvaluator.FULL_FLOW_LOCK:
+        # with DesignEvaluator.FULL_FLOW_LOCK:
+        with DesignEvaluator.FULL_FLOW_SEM:
             output_design_dir, work_dir, design_hlsfactory_flow, _kernel = self._prepare_hlsfactory_inputs(
                 design_generated_dir, eval_dir_top, eval_design_id, top_function_name
             )

@@ -373,6 +373,7 @@ class SyntheticHLSEngine:
         n_jobs_pool_llm: int = 12,
         n_jobs_pool_csim: int = 24,
         n_jobs_pool_synth: int = 24,
+        n_jobs_pool_hlsfactory: int = 24,
         temperature: float = 0.7,
         clang_path: Optional[Path] = None,
         include_paths: Optional[List[Path]] = None, 
@@ -384,6 +385,7 @@ class SyntheticHLSEngine:
             n_jobs_pool_llm=n_jobs_pool_llm,
             n_jobs_pool_csim=n_jobs_pool_csim,
             n_jobs_pool_synth=n_jobs_pool_synth,
+            n_jobs_pool_hlsfactory=n_jobs_pool_hlsfactory,
         )
         self.temperature = temperature
         self.clang_path = clang_path
@@ -407,6 +409,7 @@ class SyntheticHLSEngine:
             temperature=self.temperature,
             clang_path=self.clang_path,
             include_paths=self.include_paths,
+            pools=self.pools,
         )
 
     def run(
@@ -418,13 +421,11 @@ class SyntheticHLSEngine:
         n_samples: int = 12,
         n_feedback_iterations: int | list[int] = 5,
         n_jobs_design: int = 24,
-        n_jobs_hlsfactory: int = 24,
         output_mode: str = "FULL_CODE",
         fix: bool = False,  # Whether to try to fix errors
         run_vivado_impl: bool = True
     ):
         self.evaluator.run_vivado_impl = run_vivado_impl
-        self.evaluator.n_jobs_hlsfactory = n_jobs_hlsfactory
 
         if domain_list is None or len(domain_list) == 0:
             domain_list = ["ml_ai", "sci_sim", "fin_model"]
@@ -465,8 +466,8 @@ class SyntheticHLSEngine:
         dir_single_model = self.run_dir / model.name.split("/")[1]
         dir_single_model.mkdir(parents=True, exist_ok=True)
 
-        n_jobs_domain = min(len(domain_list), 3)  # how many domains concurrently for this model
-        n_jobs_design_per_domain = max(1, int(n_jobs_design / n_jobs_domain))
+        n_jobs_domain = min(len(domain_list), 10)  # how many domains concurrently for this model
+        n_jobs_design_per_domain = max(32, int(n_jobs_design / n_jobs_domain))
 
         Parallel(n_jobs=n_jobs_domain, backend="threading")(
             delayed(self._run_single_domain)(
@@ -550,7 +551,7 @@ class SyntheticHLSEngine:
             pools=self.pools,
             n_samples=n_samples,
             n_iterations=n_feedback_iterations,
-            n_jobs_sample_per_seed=max(1, int(n_jobs_design/n_jobs_seed)),
+            n_jobs_sample_per_seed=max(32, int(n_jobs_design/n_jobs_seed)),
             fix=fix
         )
 
