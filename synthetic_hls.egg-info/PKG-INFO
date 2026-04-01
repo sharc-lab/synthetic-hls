@@ -13,7 +13,8 @@ Requires-Dist: python-dotenv>=1.2.1
 Requires-Dist: numpy>=2.4.0
 Requires-Dist: pandas>=2.3.3
 Requires-Dist: joblib>=1.4.2
-Requires-Dist: hlsfactory@ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
+Requires-Dist: hlsfactory @ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
+Requires-Dist: openpyxl>=3.1.5
 Dynamic: license-file
 
 # SyntheticHLS: Building Complex Application-Level Synthetic HLS Design Datasets using LLMs

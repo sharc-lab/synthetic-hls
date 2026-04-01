@@ -7,6 +7,7 @@ synthetic_hls/design_eval_tools.py
 synthetic_hls/design_evaluator.py
 synthetic_hls/engine.py
 synthetic_hls/llm_models.py
+synthetic_hls/pools.py
 synthetic_hls/prompting.py
 synthetic_hls/prompts.py
 synthetic_hls/utils.py

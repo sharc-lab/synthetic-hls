@@ -6,4 +6,5 @@ python-dotenv>=1.2.1
 numpy>=2.4.0
 pandas>=2.3.3
 joblib>=1.4.2
-hlsfactory@ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
+hlsfactory @ git+https://github.com/sharc-lab/HLSFactory.git@mzhou_OptDSLv2
+openpyxl>=3.1.5
