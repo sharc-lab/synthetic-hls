@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import ast
-
 import io
 import tempfile
+import random
+import time
+import gc
 from collections import Counter, defaultdict
 from glob import glob
+from pathlib import Path
 from os.path import join, basename, exists
 from zipfile import ZipFile
 
@@ -45,6 +48,40 @@ FPGA_TOTAL_RESOURCES = {
     "BRAM": 1824,
 }
 
+
+def _format_seconds(seconds: float) -> str:
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes = int(seconds // 60)
+    rem = seconds - minutes * 60
+    if minutes < 60:
+        return f"{minutes}m{rem:04.1f}s"
+    hours = minutes // 60
+    minutes = minutes % 60
+    return f"{hours}h{minutes:02d}m{rem:04.1f}s"
+
+
+def _progress(msg: str):
+    full = f"[BUILD PROGRESS] {msg}"
+    try:
+        saver.log_info(full)
+    except Exception:
+        print(full, flush=True)
+
+
+def _choose_progress_every(total: int) -> int:
+    if total <= 20:
+        return 1
+    if total <= 200:
+        return 10
+    if total <= 1000:
+        return 25
+    if total <= 5000:
+        return 100
+    return 250
+
+
 class MyOwnDataset(Dataset):
     def __init__(self, transform=None, pre_transform=None, data_files=None):
         super(MyOwnDataset, self).__init__(SAVE_DIR, transform, pre_transform)
@@ -60,7 +97,6 @@ class MyOwnDataset(Dataset):
         if hasattr(self, "data_files"):
             return self.data_files
         return sorted(glob(join(SAVE_DIR, "*.pt")))
-        # return glob(join(SAVE_DIR, "*.pt"))
 
     def download(self):
         pass
@@ -83,14 +119,112 @@ class MyOwnDataset(Dataset):
         fn = self.get_file_path(idx)
         return _torch_load_pt(fn)
 
+def _sanitize_loaded_data(data):
+    def _ensure_tensor_1d_len(val, target_len=None, dtype=torch.float32):
+        if not torch.is_tensor(val):
+            val = torch.tensor(val, dtype=dtype)
+        val = val.reshape(-1).to(dtype)
+        if target_len is not None:
+            cur = val.numel()
+            if cur < target_len:
+                pad = torch.zeros(target_len - cur, dtype=dtype)
+                val = torch.cat([val, pad], dim=0)
+            elif cur > target_len:
+                val = val[:target_len]
+        return val
+
+    def _ensure_tensor_2d_width(val, width, dtype=torch.float32):
+        if not torch.is_tensor(val):
+            val = torch.tensor(val, dtype=dtype)
+        if val.dim() == 1:
+            val = val.reshape(-1, 1)
+        val = val.to(dtype)
+        cur_w = val.shape[1]
+        if cur_w < width:
+            pad = torch.zeros((val.shape[0], width - cur_w), dtype=dtype)
+            val = torch.cat([val, pad], dim=1)
+        elif cur_w > width:
+            val = val[:, :width]
+        return val
+
+    if hasattr(data, "edge_index") and torch.is_tensor(data.edge_index):
+        ei = data.edge_index
+        if ei.dim() != 2:
+            ei = ei.reshape(2, -1) if ei.numel() % 2 == 0 else ei
+        if ei.dim() == 2 and ei.shape[0] > 2:
+            ei = ei[:2, :]
+        data.edge_index = ei.long().contiguous()
+
+    num_nodes = None
+    if hasattr(data, "x") and torch.is_tensor(data.x) and data.x.dim() >= 1:
+        num_nodes = data.x.shape[0]
+
+    one_d_node_masks = [
+        "X_contextnids",
+        "X_pragmanids",
+        "X_pragmascopenids",
+        "X_pseudonids",
+        "X_icmpnids",
+    ]
+    for key in one_d_node_masks:
+        if hasattr(data, key):
+            val = getattr(data, key)
+            setattr(data, key, _ensure_tensor_1d_len(val, target_len=num_nodes, dtype=torch.float32))
+
+    if hasattr(data, "X_pragma_per_node"):
+        val = getattr(data, "X_pragma_per_node")
+        val = _ensure_tensor_2d_width(val, width=4, dtype=torch.float32)
+        if num_nodes is not None:
+            if val.shape[0] < num_nodes:
+                pad = torch.zeros((num_nodes - val.shape[0], val.shape[1]), dtype=torch.float32)
+                val = torch.cat([val, pad], dim=0)
+            elif val.shape[0] > num_nodes:
+                val = val[:num_nodes, :]
+        data.X_pragma_per_node = val
+
+    if hasattr(data, "pragmas"):
+        val = getattr(data, "pragmas")
+        if not torch.is_tensor(val):
+            val = torch.tensor(val, dtype=torch.float32)
+        if val.dim() == 0:
+            val = val.reshape(1, 1)
+        elif val.dim() == 1:
+            val = val.reshape(1, -1)
+        if val.shape[1] < 1:
+            pad = torch.zeros((val.shape[0], 1 - val.shape[1]), dtype=torch.float32)
+            val = torch.cat([val, pad], dim=1)
+        elif val.shape[1] > 1:
+            val = val[:, :1]
+        if val.shape[0] > 1:
+            val = val[:1, :]
+        data.pragmas = val.float()
+
+    scalar_targets = [
+        "perf", "actual_perf", "kernel_speedup", "quality",
+        "syn_BRAM", "syn_DSP", "syn_LUT", "syn_FF",
+        "impl_BRAM", "impl_DSP", "impl_LUT", "impl_FF",
+        "total_BRAM", "total_DSP", "total_LUT", "total_FF",
+    ]
+    for key in scalar_targets:
+        if hasattr(data, key):
+            val = getattr(data, key)
+            if not torch.is_tensor(val):
+                val = torch.tensor(val, dtype=torch.float32)
+            val = val.reshape(-1).float()
+            if val.numel() == 0:
+                val = torch.zeros(1, dtype=torch.float32)
+            elif val.numel() > 1:
+                val = val[:1]
+            setattr(data, key, val)
+
+    return data
 
 def _torch_load_pt(path: str):
     try:
-        return torch.load(path, weights_only=False)
+        data = torch.load(path, weights_only=False)
     except TypeError:
-        # Older PyTorch versions don't support weights_only
-        return torch.load(path)
-
+        data = torch.load(path)
+    return _sanitize_loaded_data(data)
 
 def split_dataset(dataset, train, val, dataset_test=None):
     file_li = dataset.processed_file_names
@@ -219,15 +353,31 @@ def _coo_to_sparse(coo):
     v = torch.FloatTensor(values)
     return torch.sparse.FloatTensor(i, v, torch.Size(coo.shape))
 
+
 def transform_X_torch(X):
     X = torch.FloatTensor(np.array(X))
     X = coo_matrix(X)
     return _coo_to_sparse(X).to_dense()
 
+
 def create_edge_index(g):
     g = nx.convert_node_labels_to_integers(g, ordering="sorted")
-    edge_index = torch.LongTensor(list(g.edges)).t().contiguous()
+    edges = list(g.edges)
+
+    if len(edges) == 0:
+        return torch.empty((2, 0), dtype=torch.long)
+
+    first = edges[0]
+    if len(first) == 2:
+        edge_pairs = edges
+    elif len(first) >= 3:
+        edge_pairs = [(u, v) for u, v, *_ in edges]
+    else:
+        raise RuntimeError(f"Unexpected edge tuple format in graph edges: {first}")
+
+    edge_index = torch.LongTensor(edge_pairs).t().contiguous()
     return edge_index
+
 
 def _encode_edge_dict(g, ftypes=None, ptypes=None):
     X_ftype, X_ptype = [], []
@@ -240,6 +390,7 @@ def _encode_edge_dict(g, ftypes=None, ptypes=None):
             ptypes[edata.get("position", 0)] += 1
     return {"X_ftype": X_ftype, "X_ptype": X_ptype}
 
+
 def _encode_edge_torch(edge_dict, enc_ftype, enc_ptype):
     X_ftype = enc_ftype.transform(edge_dict["X_ftype"])
     X_ptype = enc_ptype.transform(edge_dict["X_ptype"])
@@ -247,6 +398,7 @@ def _encode_edge_torch(edge_dict, enc_ftype, enc_ptype):
     if isinstance(X, csr_matrix):
         X = X.tocoo()
     return _coo_to_sparse(X).to_dense()
+
 
 def _encode_X_dict(g, ntypes=None, ptypes=None, itypes=None, ftypes=None, btypes=None):
     g = nx.convert_node_labels_to_integers(g, ordering="sorted")
@@ -369,16 +521,120 @@ def _encode_X_torch(x_dict, enc_ntype, enc_ptype, enc_itype, enc_ftype, enc_btyp
     return _coo_to_sparse(X.tocoo()).to_dense()
 
 
-def _list_zip_files(glob_expr: str) -> list[str]:
+def _list_zip_files(glob_expr) -> list[str]:
     import glob as _glob
-    files = sorted(_glob.glob(glob_expr, recursive=True))
+
+    if glob_expr is None:
+        raise ValueError("dataset_zips_glob is None")
+
+    if isinstance(glob_expr, (list, tuple)):
+        exprs = [str(x).strip() for x in glob_expr if str(x).strip()]
+    else:
+        s = str(glob_expr).strip()
+        if not s:
+            raise ValueError("dataset_zips_glob is empty")
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                parsed = ast.literal_eval(s)
+                if isinstance(parsed, (list, tuple)):
+                    exprs = [str(x).strip() for x in parsed if str(x).strip()]
+                else:
+                    exprs = [s]
+            except Exception:
+                exprs = [s]
+        elif "," in s:
+            exprs = [x.strip() for x in s.split(",") if x.strip()]
+        else:
+            exprs = [s]
+
+    files = []
+    for expr in exprs:
+        matched = sorted(_glob.glob(expr, recursive=True))
+        if matched:
+            files.extend(matched)
+            continue
+
+        if Path(expr).is_file():
+            files.append(expr)
+            continue
+
+        raise FileNotFoundError(f"No zip files matched: {expr}")
+
+    files = sorted(dict.fromkeys(files))
     if not files:
         raise FileNotFoundError(f"No zip files matched: {glob_expr}")
     return files
 
+
+def _get_zip_design_counts(zip_files: list[str]) -> list[int]:
+    counts = []
+    for zfp in zip_files:
+        with ZipFile(zfp, "r") as z:
+            csv_name = _pick_data_all_csv_name(z)
+            df = pd.read_csv(io.StringIO(_read_zip_text(z, csv_name)), usecols=["design_id"])
+            counts.append(len(df))
+    return counts
+
+
+def _compute_balanced_per_zip_quotas(available_counts: list[int], dataset_size: int | None) -> list[int | None]:
+    if dataset_size is None:
+        return [None] * len(available_counts)
+
+    if dataset_size < 0:
+        raise ValueError(f"dataset_size must be >= 0, got {dataset_size}")
+
+    if len(available_counts) == 0:
+        return []
+
+    total_available = sum(available_counts)
+    if total_available <= 0:
+        return [0] * len(available_counts)
+
+    target_total = min(dataset_size, total_available)
+
+    raw_quotas = [
+        (target_total * cnt) / total_available
+        for cnt in available_counts
+    ]
+
+    quotas = [int(np.floor(q)) for q in raw_quotas]
+    assigned = sum(quotas)
+    leftover = target_total - assigned
+
+    # distribute remaining samples by largest fractional part
+    frac_order = sorted(
+        range(len(available_counts)),
+        key=lambda i: (raw_quotas[i] - quotas[i], available_counts[i]),
+        reverse=True,
+    )
+
+    for i in frac_order:
+        if leftover <= 0:
+            break
+        if quotas[i] < available_counts[i]:
+            quotas[i] += 1
+            leftover -= 1
+
+    # if any leftover remains because some zips hit capacity, redistribute
+    while leftover > 0:
+        progressed = False
+        for i in range(len(available_counts)):
+            if quotas[i] < available_counts[i]:
+                quotas[i] += 1
+                leftover -= 1
+                progressed = True
+                if leftover == 0:
+                    break
+        if not progressed:
+            break
+
+    return quotas
+
+
 def _read_zip_text(z: ZipFile, name: str) -> str:
     with z.open(name, "r") as f:
         return f.read().decode("utf-8", errors="ignore")
+
 
 def _pick_data_all_csv_name(z: ZipFile) -> str:
     names = set(z.namelist())
@@ -388,6 +644,7 @@ def _pick_data_all_csv_name(z: ZipFile) -> str:
     if len(candidates) == 1:
         return candidates[0]
     raise FileNotFoundError("Could not find data_all.csv in zip.")
+
 
 def _extract_single_gexf_from_artifacts_zip(outer_zip: ZipFile, design_id: str) -> str:
     art_path = f"{design_id}/artifacts.zip"
@@ -431,6 +688,7 @@ def _get_num(row: dict, key: str, default: float = 0.0) -> float:
         return float(v)
     except Exception:
         return default
+
 
 def _pick_first(row: dict, keys: list[str], default: float = 0.0) -> float:
     for k in keys:
@@ -526,15 +784,10 @@ def _map_row_to_targets(row: dict) -> dict:
     out["impl-DSP"] = float(dsp_impl)
     out["impl-BRAM"] = float(bram_impl)
 
-    # lut_total = lut_impl if lut_impl > 0 else lut_syn
-    # ff_total = ff_impl if ff_impl > 0 else ff_syn
-    # dsp_total = dsp_impl if dsp_impl > 0 else dsp_syn
-    # bram_total = bram_impl if bram_impl > 0 else bram_syn
-
-    out["total-LUT"] = FPGA_TOTAL_RESOURCES["LUT"]  # [MOD]
-    out["total-FF"] = FPGA_TOTAL_RESOURCES["FF"]  # [MOD]
-    out["total-DSP"] = FPGA_TOTAL_RESOURCES["DSP"]  # [MOD]
-    out["total-BRAM"] = FPGA_TOTAL_RESOURCES["BRAM"]  # [MOD]
+    out["total-LUT"] = FPGA_TOTAL_RESOURCES["LUT"]
+    out["total-FF"] = FPGA_TOTAL_RESOURCES["FF"]
+    out["total-DSP"] = FPGA_TOTAL_RESOURCES["DSP"]
+    out["total-BRAM"] = FPGA_TOTAL_RESOURCES["BRAM"]
 
     out["quality"] = 0.0
     out["kernel_speedup"] = 0.0
@@ -543,36 +796,75 @@ def _map_row_to_targets(row: dict) -> dict:
     return out
 
 
-def get_data_list_from_hlsfactory_zips():
-    if getattr(FLAGS, "dataset_zips_glob", None) is None:
-        raise ValueError("FLAGS.dataset_zips_glob must be set (glob of HLSFactory data_packaging zips).")
+def _sample_df_rows_balanced(df: pd.DataFrame, quota: int | None, rng: random.Random) -> pd.DataFrame:
+    if quota is None:
+        return df
 
-    zip_files = _list_zip_files(FLAGS.dataset_zips_glob)
-    saver.log_info(f"Found {len(zip_files)} dataset zip(s)")
+    if quota <= 0:
+        return df.iloc[[]].copy()
 
-    if getattr(FLAGS, "encoder_path", None) is not None:
-        saver.info(f"loading encoder from {FLAGS.encoder_path}")
-        encoders = load(FLAGS.encoder_path, saver.logdir)
-        enc_ntype = encoders["enc_ntype"]
-        enc_ptype = encoders["enc_ptype"]
-        enc_itype = encoders["enc_itype"]
-        enc_ftype = encoders["enc_ftype"]
-        enc_btype = encoders["enc_btype"]
-        enc_ftype_edge = encoders["enc_ftype_edge"]
-        enc_ptype_edge = encoders["enc_ptype_edge"]
-    else:
-        enc_ntype = OneHotEncoder(handle_unknown="ignore")
-        enc_ptype = OneHotEncoder(handle_unknown="ignore")
-        enc_itype = OneHotEncoder(handle_unknown="ignore")
-        enc_ftype = OneHotEncoder(handle_unknown="ignore")
-        enc_btype = OneHotEncoder(handle_unknown="ignore")
-        enc_ftype_edge = OneHotEncoder(handle_unknown="ignore")
-        enc_ptype_edge = OneHotEncoder(handle_unknown="ignore")
+    n = len(df)
+    if quota >= n:
+        return df.sample(frac=1.0, random_state=rng.randint(0, 10**9)).reset_index(drop=True)
+
+    sampled_idx = rng.sample(list(range(n)), quota)
+    return df.iloc[sampled_idx].reset_index(drop=True)
+
+
+
+def _prepare_sampled_zip_rows(zip_files: list[str], quotas: list[int | None], rng: random.Random):
+    sampled = []
+    total_rows = 0
+    t0 = time.time()
+
+    for zip_idx, zfp in enumerate(zip_files):
+        zip_t0 = time.time()
+        saver.info(f"[ZIP] {zfp}")
+        _progress(f"[SAMPLE {zip_idx + 1}/{len(zip_files)}] reading csv from {basename(zfp)}")
+        with ZipFile(zfp, "r") as z:
+            csv_name = _pick_data_all_csv_name(z)
+            df = pd.read_csv(io.StringIO(_read_zip_text(z, csv_name)))
+
+        if "design_id" not in df.columns:
+            raise RuntimeError(f"{csv_name} must contain design_id. got columns: {list(df.columns)}")
+
+        raw_count = len(df)
+        quota = quotas[zip_idx]
+        df = _sample_df_rows_balanced(df, quota, rng)
+        rows = df.to_dict("records")
+        total_rows += len(rows)
+
+        _progress(
+            f"[SAMPLE {zip_idx + 1}/{len(zip_files)}] raw={raw_count} sampled={len(rows)} "
+            f"quota={quota} zip_elapsed={_format_seconds(time.time() - zip_t0)} "
+        )
+        sampled.append((zfp, rows))
+
+    _progress(
+        f"[SAMPLE DONE] sampled_total={total_rows} across {len(zip_files)} zip(s) "
+        f"elapsed={_format_seconds(time.time() - t0)}"
+    )
+    return sampled
+
+
+def _create_empty_encoders():
+    return {
+        "enc_ntype": OneHotEncoder(handle_unknown="ignore"),
+        "enc_ptype": OneHotEncoder(handle_unknown="ignore"),
+        "enc_itype": OneHotEncoder(handle_unknown="ignore"),
+        "enc_ftype": OneHotEncoder(handle_unknown="ignore"),
+        "enc_btype": OneHotEncoder(handle_unknown="ignore"),
+        "enc_ftype_edge": OneHotEncoder(handle_unknown="ignore"),
+        "enc_ptype_edge": OneHotEncoder(handle_unknown="ignore"),
+    }
+
+
+def _fit_encoders_from_sampled_rows(sampled_zip_rows):
+    encoders = _create_empty_encoders()
 
     X_ntype_all, X_ptype_all, X_itype_all, X_ftype_all, X_btype_all = [], [], [], [], []
     edge_ftype_all, edge_ptype_all = [], []
-    data_list = []
-    init_feat_dict = {}
+    skipped = 0
 
     ntypes = Counter()
     ptypes = Counter()
@@ -582,26 +874,38 @@ def get_data_list_from_hlsfactory_zips():
     ptypes_edge = Counter()
     ftypes_edge = Counter()
 
-    for zfp in zip_files:
-        saver.info(f"[ZIP] {zfp}")
+    total_rows = sum(len(rows) for _, rows in sampled_zip_rows)
+    progress_every = _choose_progress_every(total_rows)
+    fit_t0 = time.time()
+    seen = 0
+
+    _progress(
+        f"[ENCODER FIT] start total_designs={total_rows}"
+    )
+
+    for zip_idx, (zfp, rows) in enumerate(sampled_zip_rows):
+        zip_t0 = time.time()
+        # _progress(
+        #     f"[ENCODER FIT][ZIP {zip_idx + 1}/{len(sampled_zip_rows)}] start "
+        #     f"name={basename(zfp)} rows={len(rows)}"
+        # )
         with ZipFile(zfp, "r") as z:
-            csv_name = _pick_data_all_csv_name(z)
-            df = pd.read_csv(io.StringIO(_read_zip_text(z, csv_name)))
-
-            if "design_id" not in df.columns:
-                raise RuntimeError(f"{csv_name} must contain design_id. got columns: {list(df.columns)}")
-
-            for _, row_s in df.iterrows():
-                row = row_s.to_dict()
+            for row in rows:
                 design_id = str(row["design_id"])
-
                 try:
                     gexf_fp = _extract_single_gexf_from_artifacts_zip(z, design_id)
+                    g = nx.read_gexf(gexf_fp)
                 except Exception as e:
-                    saver.warning(f"skip design_id={design_id} due to missing graph: {e}")
+                    saver.warning(f"skip design_id={design_id} during encoder fit due to missing graph: {e}")
+                    skipped += 1
+                    seen += 1
+                    # if seen % progress_every == 0 or seen == total_rows:
+                    #     _progress(
+                    #         f"[ENCODER FIT] done={seen}/{total_rows} skipped={skipped} "
+                    #         f"elapsed={_format_seconds(time.time() - fit_t0)} "
+                    #         f"maxrss={_get_maxrss_mb():.1f} MB"
+                    #     )
                     continue
-
-                g = nx.read_gexf(gexf_fp)
 
                 d_node = _encode_X_dict(g, ntypes, ptypes, itypes, ftypes, btypes)
                 d_edge = _encode_edge_dict(g, ftypes_edge, ptypes_edge)
@@ -614,108 +918,229 @@ def get_data_list_from_hlsfactory_zips():
                 edge_ftype_all += d_edge["X_ftype"]
                 edge_ptype_all += d_edge["X_ptype"]
 
-                label = _map_row_to_targets(row)
+                seen += 1
+                # if seen % progress_every == 0 or seen == total_rows:
+                #     _progress(
+                #         f"[ENCODER FIT] done={seen}/{total_rows} skipped={skipped} "
+                #         f"last_design={design_id} nodes={g.number_of_nodes()} edges={g.number_of_edges()} "
+                #         f"elapsed={_format_seconds(time.time() - fit_t0)} "
+                #         f"maxrss={_get_maxrss_mb():.1f} MB"
+                #     )
 
-                pragmas = torch.zeros((1, 1), dtype=torch.float32)
-                init_feat_dict[design_id] = [1, 1]
+                del g, d_node, d_edge
+                if seen % progress_every == 0:
+                    gc.collect()
 
-                g._harp_tmp = {
-                    "d_node": d_node,
-                    "d_edge": d_edge,
-                    "label": label,
-                    "design_id": design_id,
-                    "row": row,
-                    "pragmas": pragmas,
-                }
-                data_list.append(g)
-
-    if getattr(FLAGS, "encoder_path", None) is None:
-        enc_ptype.fit(X_ptype_all)
-        enc_ntype.fit(X_ntype_all)
-        enc_itype.fit(X_itype_all)
-        enc_ftype.fit(X_ftype_all)
-        enc_btype.fit(X_btype_all)
-        enc_ftype_edge.fit(edge_ftype_all)
-        enc_ptype_edge.fit(edge_ptype_all)
-        saver.log_info("Encoder fitting done.")
-
-    pyg_list = []
-    for g in data_list:
-        tmp = g._harp_tmp
-        d_node, d_edge = tmp["d_node"], tmp["d_edge"]
-        label = tmp["label"]
-        design_id = tmp["design_id"]
-        row = tmp["row"]
-
-        X = _encode_X_torch(d_node, enc_ntype, enc_ptype, enc_itype, enc_ftype, enc_btype)
-        edge_attr = _encode_edge_torch(d_edge, enc_ftype_edge, enc_ptype_edge)
-        edge_index = create_edge_index(g)
-
-        gname = row.get("design__name", design_id)
-        kernel = row.get("design__name", gname)
-
-        pyg_list.append(
-            Data(
-                gname=str(gname),
-                kernel=str(kernel),
-                key=str(design_id),
-                x=X,
-                edge_index=edge_index,
-                edge_attr=edge_attr,
-                X_contextnids=d_node["X_contextnids"],
-                X_pragmanids=d_node["X_pragmanids"],
-                X_pragmascopenids=d_node["X_pragmascopenids"],
-                X_pseudonids=d_node["X_pseudonids"],
-                X_icmpnids=d_node["X_icmpnids"],
-                X_pragma_per_node=d_node["X_pragma_per_node"],
-                pragmas=tmp["pragmas"],
-
-                perf=torch.FloatTensor(np.array([label["perf"]])),
-                actual_perf=torch.FloatTensor(np.array([label["actual_perf"]])),
-                kernel_speedup=torch.FloatTensor(np.array([label["kernel_speedup"]])),
-                quality=torch.FloatTensor(np.array([label["quality"]])),
-
-                syn_BRAM=torch.FloatTensor(np.array([label["syn-BRAM"]])),
-                syn_DSP=torch.FloatTensor(np.array([label["syn-DSP"]])),
-                syn_LUT=torch.FloatTensor(np.array([label["syn-LUT"]])),
-                syn_FF=torch.FloatTensor(np.array([label["syn-FF"]])),
-
-                impl_BRAM=torch.FloatTensor(np.array([label["impl-BRAM"]])),
-                impl_DSP=torch.FloatTensor(np.array([label["impl-DSP"]])),
-                impl_LUT=torch.FloatTensor(np.array([label["impl-LUT"]])),
-                impl_FF=torch.FloatTensor(np.array([label["impl-FF"]])),
-
-                # totals kept for compatibility even if not trained on
-                total_BRAM=torch.FloatTensor(np.array([label["total-BRAM"]])),
-                total_DSP=torch.FloatTensor(np.array([label["total-DSP"]])),
-                total_LUT=torch.FloatTensor(np.array([label["total-LUT"]])),
-                total_FF=torch.FloatTensor(np.array([label["total-FF"]])),
-            )
+        _progress(
+            f"[ENCODER FIT][ZIP {zip_idx + 1}/{len(sampled_zip_rows)}] done "
+            f"name={basename(zfp)} zip_elapsed={_format_seconds(time.time() - zip_t0)} "
         )
 
-    nns = [d.x.shape[0] for d in pyg_list]
-    print_stats(nns, "number of nodes")
-    ads = [d.edge_index.shape[1] / d.x.shape[0] for d in pyg_list]
-    print_stats(ads, "avg degrees")
+    _progress("[ENCODER FIT] fitting sklearn encoders now")
+    encoders["enc_ptype"].fit(X_ptype_all)
+    encoders["enc_ntype"].fit(X_ntype_all)
+    encoders["enc_itype"].fit(X_itype_all)
+    encoders["enc_ftype"].fit(X_ftype_all)
+    encoders["enc_btype"].fit(X_btype_all)
+    encoders["enc_ftype_edge"].fit(edge_ftype_all)
+    encoders["enc_ptype_edge"].fit(edge_ptype_all)
+    saver.log_info(f"Encoder fitting done. skipped_graphs_during_fit={skipped}")
+    _progress(
+        f"[ENCODER FIT DONE] skipped={skipped} elapsed={_format_seconds(time.time() - fit_t0)} "
+    )
+    return encoders
+
+
+def _build_pyg_data_from_graph(g, row, d_node, d_edge, encoders):
+    label = _map_row_to_targets(row)
+    design_id = str(row["design_id"])
+
+    X = _encode_X_torch(
+        d_node,
+        encoders["enc_ntype"],
+        encoders["enc_ptype"],
+        encoders["enc_itype"],
+        encoders["enc_ftype"],
+        encoders["enc_btype"],
+    )
+    edge_attr = _encode_edge_torch(
+        d_edge,
+        encoders["enc_ftype_edge"],
+        encoders["enc_ptype_edge"],
+    )
+    edge_index = create_edge_index(g)
+
+    gname = row.get("design__name", design_id)
+    kernel = row.get("design__name", gname)
+    pragmas = torch.zeros((1, 1), dtype=torch.float32)
+
+    data = Data(
+        gname=str(gname),
+        kernel=str(kernel),
+        key=str(design_id),
+        x=X,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        X_contextnids=d_node["X_contextnids"],
+        X_pragmanids=d_node["X_pragmanids"],
+        X_pragmascopenids=d_node["X_pragmascopenids"],
+        X_pseudonids=d_node["X_pseudonids"],
+        X_icmpnids=d_node["X_icmpnids"],
+        X_pragma_per_node=d_node["X_pragma_per_node"],
+        pragmas=pragmas,
+
+        perf=torch.FloatTensor(np.array([label["perf"]])),
+        actual_perf=torch.FloatTensor(np.array([label["actual_perf"]])),
+        kernel_speedup=torch.FloatTensor(np.array([label["kernel_speedup"]])),
+        quality=torch.FloatTensor(np.array([label["quality"]])),
+
+        syn_BRAM=torch.FloatTensor(np.array([label["syn-BRAM"]])),
+        syn_DSP=torch.FloatTensor(np.array([label["syn-DSP"]])),
+        syn_LUT=torch.FloatTensor(np.array([label["syn-LUT"]])),
+        syn_FF=torch.FloatTensor(np.array([label["syn-FF"]])),
+
+        impl_BRAM=torch.FloatTensor(np.array([label["impl-BRAM"]])),
+        impl_DSP=torch.FloatTensor(np.array([label["impl-DSP"]])),
+        impl_LUT=torch.FloatTensor(np.array([label["impl-LUT"]])),
+        impl_FF=torch.FloatTensor(np.array([label["impl-FF"]])),
+
+        total_BRAM=torch.FloatTensor(np.array([label["total-BRAM"]])),
+        total_DSP=torch.FloatTensor(np.array([label["total-DSP"]])),
+        total_LUT=torch.FloatTensor(np.array([label["total-LUT"]])),
+        total_FF=torch.FloatTensor(np.array([label["total-FF"]])),
+    )
+    return data, design_id
+
+
+def get_data_list_from_hlsfactory_zips():
+    if getattr(FLAGS, "dataset_zips_glob", None) is None:
+        raise ValueError("FLAGS.dataset_zips_glob must be set (glob of HLSFactory data_packaging zips).")
+
+    build_t0 = time.time()
+    zip_files = _list_zip_files(FLAGS.dataset_zips_glob)
+    saver.log_info(f"Found {len(zip_files)} dataset zip(s)")
+    _progress(
+        f"[START] dataset={FLAGS.dataset} zips={len(zip_files)} dataset_size={getattr(FLAGS, 'dataset_size', None)} "
+        f"force_regen={getattr(FLAGS, 'force_regen', False)} encoder_path={getattr(FLAGS, 'encoder_path', None)} "
+        f"save_dir={SAVE_DIR}"
+    )
+
+    available_counts = _get_zip_design_counts(zip_files)
+    quotas = _compute_balanced_per_zip_quotas(available_counts, getattr(FLAGS, "dataset_size", None))
+    rng = random.Random(FLAGS.random_seed)
+
+    saver.log_info(f"[ZIP COUNTS] available per zip: {dict(zip([basename(z) for z in zip_files], available_counts))}")
+    saver.log_info(f"[ZIP QUOTAS] target per zip: {dict(zip([basename(z) for z in zip_files], quotas))}")
+
+    sampled_zip_rows = _prepare_sampled_zip_rows(zip_files, quotas, rng)
+    total_sampled = sum(len(rows) for _, rows in sampled_zip_rows)
+    build_progress_every = _choose_progress_every(total_sampled)
+    _progress(
+        f"[BUILD SETUP] total_sampled={total_sampled} progress_every={build_progress_every} "
+    )
+
+    if getattr(FLAGS, "encoder_path", None) is not None:
+        saver.info(f"loading encoder from {FLAGS.encoder_path}")
+        _progress(f"[ENCODER] loading existing encoders from {FLAGS.encoder_path}")
+        encoders = load(FLAGS.encoder_path, saver.logdir)
+        _progress(f"[ENCODER] loaded existing encoders")
+    else:
+        encoders = _fit_encoders_from_sampled_rows(sampled_zip_rows)
+
+    init_feat_dict = {}
+    nns, ads = [], []
+    built_data = []
+    saved_files = []
+    graph_idx = 0
+    skipped = 0
 
     if getattr(FLAGS, "force_regen", False):
-        saver.log_info(f"Saving {len(pyg_list)} graphs to disk {SAVE_DIR}; Deleting existing files")
+        saver.log_info(f"Streaming-save enabled; deleting existing files in {SAVE_DIR}")
         import shutil as _shutil
         if exists(SAVE_DIR):
             _shutil.rmtree(SAVE_DIR)
         create_dir_if_not_exists(SAVE_DIR)
-        for i in range(len(pyg_list)):
-            torch.save(pyg_list[i], osp.join(SAVE_DIR, f"data_{i}.pt"))
+        _progress(f"[SAVE SETUP] cleared save dir {SAVE_DIR}")
 
-        obj = {
-            "enc_ntype": enc_ntype, "enc_ptype": enc_ptype,
-            "enc_itype": enc_itype, "enc_ftype": enc_ftype,
-            "enc_btype": enc_btype,
-            "enc_ftype_edge": enc_ftype_edge, "enc_ptype_edge": enc_ptype_edge,
-        }
-        save(obj, ENCODER_PATH)
+    for zip_idx, (zfp, rows) in enumerate(sampled_zip_rows):
+        zip_t0 = time.time()
+        # _progress(
+        #     f"[BUILD ZIP {zip_idx + 1}/{len(sampled_zip_rows)}] start name={basename(zfp)} rows={len(rows)}"
+        # )
+        with ZipFile(zfp, "r") as z:
+            for row_idx, row in enumerate(rows, start=1):
+                design_id = str(row["design_id"])
+                try:
+                    gexf_fp = _extract_single_gexf_from_artifacts_zip(z, design_id)
+                    g = nx.read_gexf(gexf_fp)
+                except Exception as e:
+                    saver.warning(f"skip design_id={design_id} due to missing graph: {e}")
+                    skipped += 1
+                    current_done = graph_idx + skipped
+                    # if current_done % build_progress_every == 0 or current_done == total_sampled:
+                    #     _progress(
+                    #         f"[BUILD] done={current_done}/{total_sampled} built={graph_idx} skipped={skipped} "
+                    #         f"elapsed={_format_seconds(time.time() - build_t0)} "
+                    #     )
+                    continue
+
+                d_node = _encode_X_dict(g)
+                d_edge = _encode_edge_dict(g)
+                data, design_id = _build_pyg_data_from_graph(g, row, d_node, d_edge, encoders)
+
+                init_feat_dict[design_id] = [1, 1]
+                nns.append(data.x.shape[0])
+                ads.append(data.edge_index.shape[1] / max(data.x.shape[0], 1))
+
+                if getattr(FLAGS, "force_regen", False):
+                    out_fp = osp.join(SAVE_DIR, f"data_{graph_idx}.pt")
+                    torch.save(data, out_fp)
+                    saved_files.append(out_fp)
+                else:
+                    built_data.append(data)
+
+                graph_idx += 1
+                current_done = graph_idx + skipped
+                # if current_done % build_progress_every == 0 or current_done == total_sampled:
+                #     _progress(
+                #         f"[BUILD] done={current_done}/{total_sampled} built={graph_idx} skipped={skipped} "
+                #         f"elapsed={_format_seconds(time.time() - build_t0)} "
+                #     )
+
+                del g, d_node, d_edge, data
+                if current_done % build_progress_every == 0:
+                    gc.collect()
+
+        _progress(
+            f"[BUILD ZIP {zip_idx + 1}/{len(sampled_zip_rows)}] done name={basename(zfp)} "
+            f"zip_elapsed={_format_seconds(time.time() - zip_t0)} built={graph_idx} skipped={skipped} "
+        )
+
+    if nns:
+        print_stats(nns, "number of nodes")
+    if ads:
+        print_stats(ads, "avg degrees")
+
+    _progress(
+        f"[SUMMARY] built={graph_idx} skipped={skipped} elapsed={_format_seconds(time.time() - build_t0)} "
+    )
+
+    if getattr(FLAGS, "force_regen", False):
+        _progress("[FINALIZE] saving encoders and pragma_dim")
+        save(encoders, ENCODER_PATH)
         save(init_feat_dict, join(SAVE_DIR, "pragma_dim"))
+        _progress(
+            f"[DONE] saved_graphs={len(saved_files)} elapsed={_format_seconds(time.time() - build_t0)} "
+        )
+        return MyOwnDataset(data_files=saved_files), init_feat_dict
 
+    saver.warning(
+        "Dataset was built in memory but not saved because force_regen=False. "
+        "For build_dataset, use --force_regen True so streaming save can keep memory low."
+    )
+    _progress(
+        f"[DONE NO SAVE] in_memory_graphs={len(built_data)} elapsed={_format_seconds(time.time() - build_t0)} "
+    )
     return MyOwnDataset(), init_feat_dict
 
 

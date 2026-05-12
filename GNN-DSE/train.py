@@ -219,7 +219,10 @@ def inference(dataset, init_pragma_dict=None, model_path=FLAGS.model_path, val_r
     if model_path != None:
         saver.info(f'loading model from {model_path}')
         model.load_state_dict(torch.load(model_path, map_location=torch.device('cpu')))
-        shutil.copy(model_path, join(saver.logdir, f"{(basename(model_path)).split('.')[0]}-{model_id}.pth"))
+        shutil.copy(
+            model_path,
+            join(saver.get_model_dir(), f"{(basename(model_path)).split('.')[0]}-{model_id}.pth")
+        )
     else:
         saver.error(f'model path should be set during inference')
         raise RuntimeError()
