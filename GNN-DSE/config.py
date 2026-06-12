@@ -39,13 +39,20 @@ parser.add_argument("--task", default="regression")
 parser.add_argument("--subtask", default="train")
 parser.add_argument("--plot_dse", type=_str2bool, default=False)
 
+# Supports:
+#   1. a single glob string, i.e. "/path/to/*.zip"
+#   2. a comma-separated list of zip paths / globs
+#   3. a Python literal list string, i.e. '["A.zip", "B.zip"]'
 parser.add_argument("--dataset_zips_glob", default=None)
 parser.add_argument("--graph_in_artifacts_subpath", default="artifacts/graph")
+
+# If None, use all samples. Otherwise, randomly sample the specified number of samples from the dataset.
+parser.add_argument("--dataset_size", type=int, default=None)
 
 TARGETS = [
     "perf",
     "syn-BRAM", "syn-DSP", "syn-LUT", "syn-FF",
-    "impl-BRAM", "impl-DSP", "impl-LUT", "impl-FF",
+    # "impl-BRAM", "impl-DSP", "impl-LUT", "impl-FF",
 ]
 parser.add_argument("--targets", default=TARGETS)
 parser.add_argument("--target", default=None)
@@ -99,7 +106,7 @@ parser.add_argument("--MLP_common_lyr", type=int, default=0)
 parser.add_argument("--save_model", type=_str2bool, default=True)
 parser.add_argument("--test_ratio", type=float, default=0.3)
 parser.add_argument("--val_ratio", type=float, default=0)
-parser.add_argument("--is_train_set", type=_str2bool, default=False)
+parser.add_argument("--is_train_set", type=_str2bool, default=True)
 parser.add_argument("--resample", type=_str2bool, default=False)
 parser.add_argument("--activation", default="elu")
 parser.add_argument("--activation_type", default="elu")
@@ -108,10 +115,10 @@ parser.add_argument("--lr", type=float, default=3e-4)
 parser.add_argument("--weight_decay", type=float, default=1e-4)
 parser.add_argument("--scheduler", default=None)
 parser.add_argument("--warmup", default=None)
-parser.add_argument("--random_seed", type=int, default=456)
-parser.add_argument("--batch_size", type=int, default=32)
+parser.add_argument("--random_seed", type=int, default=123)
+parser.add_argument("--batch_size", type=int, default=64)
 parser.add_argument("--loss", type=str, default="MSE")
-parser.add_argument("--epoch_num", type=int, default=300)
+parser.add_argument("--epoch_num", type=int, default=200)
 
 parser.add_argument("--feature_extract", type=_str2bool, default=False)
 parser.add_argument("--fix_gnn_layer", type=int, default=0)
@@ -125,7 +132,7 @@ parser.add_argument("--test_kernels", default=None)
 parser.add_argument("--model_path", default=None)
 parser.add_argument("--topk", type=int, default=50)
 
-parser.add_argument("--dataset", default="polybench_mini-base")
+parser.add_argument("--dataset", default="dataset_final")
 parser.add_argument("--tag", default="gnndse")
 parser.add_argument("--model_tag", default=None)
 

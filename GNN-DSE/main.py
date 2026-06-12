@@ -39,9 +39,10 @@ if __name__ == "__main__":
     dataset = MyOwnDataset()
     pragma_dim = _load_pragma_dim(dataset)
 
+    # Subtasks
     if FLAGS.subtask == "train":
         from train import train_main
-        test_ratio, resample_list = FLAGS.val_ratio, [-1]
+        test_ratio, resample_list = FLAGS.test_ratio, [-1]
         if FLAGS.resample:
             test_ratio, resample_list = 0.25, list(range(4))
 
@@ -56,7 +57,7 @@ if __name__ == "__main__":
         if FLAGS.model_path is None:
             raise RuntimeError("--model_path must be set for inference")
         from train import inference
-        inference(dataset, init_pragma_dict=pragma_dim, model_path=FLAGS.model_path, test_ratio=FLAGS.val_ratio)
+        inference(dataset, init_pragma_dict=pragma_dim, model_path=FLAGS.model_path, test_ratio=FLAGS.test_ratio)
 
     elif FLAGS.subtask == "rank":
         from dse import run_inference_and_rank
