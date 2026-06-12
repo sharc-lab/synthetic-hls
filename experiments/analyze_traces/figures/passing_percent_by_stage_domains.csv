@@ -1,0 +1,93 @@
+domain,stage,num_designs,num_samples,num_passed,average_passing_percent
+astro,Seed,1,16,3,18.750000
+astro,Feedback 0,3,24,5,20.833333
+astro,Feedback 1,1,8,8,100.000000
+astro,Feedback 2,1,8,4,50.000000
+astro,Feedback 3,1,8,5,62.500000
+astro,Feedback 4,1,8,7,87.500000
+astro,Feedback 5,1,8,5,62.500000
+astro,Feedback 6,1,8,3,37.500000
+astro,Feedback 7,1,8,4,50.000000
+astro,Feedback 8,1,8,4,50.000000
+crypto_bc,Seed,1,16,8,50.000000
+crypto_bc,Feedback 0,8,64,45,70.312500
+crypto_bc,Feedback 1,8,64,53,82.812500
+crypto_bc,Feedback 2,8,64,38,59.375000
+crypto_bc,Feedback 3,8,64,40,62.500000
+crypto_bc,Feedback 4,8,64,30,46.875000
+crypto_bc,Feedback 5,8,64,40,62.500000
+crypto_bc,Feedback 6,8,64,50,78.125000
+crypto_bc,Feedback 7,8,64,52,81.250000
+crypto_bc,Feedback 8,8,64,52,81.250000
+data_big,Seed,1,16,9,56.250000
+data_big,Feedback 0,9,72,29,40.277778
+data_big,Feedback 1,9,72,58,80.555556
+data_big,Feedback 2,9,72,49,68.055556
+data_big,Feedback 3,9,72,53,73.611111
+data_big,Feedback 4,9,72,51,70.833333
+data_big,Feedback 5,9,72,31,43.055556
+data_big,Feedback 6,9,72,56,77.777778
+data_big,Feedback 7,9,72,54,75.000000
+data_big,Feedback 8,9,72,59,81.944444
+eng_sim,Seed,1,16,1,6.250000
+eng_sim,Feedback 0,1,8,0,0.000000
+fin_model,Seed,1,16,10,62.500000
+fin_model,Feedback 0,10,80,57,71.250000
+fin_model,Feedback 1,10,80,59,73.750000
+fin_model,Feedback 2,10,80,46,57.500000
+fin_model,Feedback 3,10,80,41,51.250000
+fin_model,Feedback 4,9,72,32,44.444444
+fin_model,Feedback 5,8,64,26,40.625000
+fin_model,Feedback 6,7,56,31,55.357143
+fin_model,Feedback 7,7,56,41,73.214286
+fin_model,Feedback 8,7,56,42,75.000000
+gfx_render,Seed,1,16,4,25.000000
+gfx_render,Feedback 0,4,32,11,34.375000
+gfx_render,Feedback 1,4,32,15,46.875000
+gfx_render,Feedback 2,4,32,14,43.750000
+gfx_render,Feedback 3,3,24,11,45.833333
+gfx_render,Feedback 4,3,24,6,25.000000
+gfx_render,Feedback 5,3,24,9,37.500000
+gfx_render,Feedback 6,2,16,7,43.750000
+gfx_render,Feedback 7,2,16,12,75.000000
+gfx_render,Feedback 8,2,16,10,62.500000
+health_med,Seed,1,16,7,43.750000
+health_med,Feedback 0,7,56,31,55.357143
+health_med,Feedback 1,7,56,37,66.071429
+health_med,Feedback 2,7,56,39,69.642857
+health_med,Feedback 3,7,56,22,39.285714
+health_med,Feedback 4,7,56,24,42.857143
+health_med,Feedback 5,6,48,18,37.500000
+health_med,Feedback 6,6,48,38,79.166667
+health_med,Feedback 7,6,48,37,77.083333
+health_med,Feedback 8,6,48,38,79.166667
+ml_ai,Seed,1,16,5,31.250000
+ml_ai,Feedback 0,5,40,23,57.500000
+ml_ai,Feedback 1,5,40,29,72.500000
+ml_ai,Feedback 2,5,40,23,57.500000
+ml_ai,Feedback 3,5,40,17,42.500000
+ml_ai,Feedback 4,5,40,11,27.500000
+ml_ai,Feedback 5,5,40,14,35.000000
+ml_ai,Feedback 6,5,40,28,70.000000
+ml_ai,Feedback 7,5,40,34,85.000000
+ml_ai,Feedback 8,5,40,29,72.500000
+sci_sim,Seed,1,16,6,37.500000
+sci_sim,Feedback 0,6,48,22,45.833333
+sci_sim,Feedback 1,5,40,30,75.000000
+sci_sim,Feedback 2,5,40,19,47.500000
+sci_sim,Feedback 3,5,40,25,62.500000
+sci_sim,Feedback 4,5,40,14,35.000000
+sci_sim,Feedback 5,5,40,16,40.000000
+sci_sim,Feedback 6,5,40,29,72.500000
+sci_sim,Feedback 7,5,40,38,95.000000
+sci_sim,Feedback 8,5,40,35,87.500000
+telecom_sp,Seed,1,16,5,31.250000
+telecom_sp,Feedback 0,5,40,30,75.000000
+telecom_sp,Feedback 1,5,40,23,57.500000
+telecom_sp,Feedback 2,4,32,15,46.875000
+telecom_sp,Feedback 3,4,32,13,40.625000
+telecom_sp,Feedback 4,4,32,10,31.250000
+telecom_sp,Feedback 5,4,32,14,43.750000
+telecom_sp,Feedback 6,4,32,19,59.375000
+telecom_sp,Feedback 7,4,32,24,75.000000
+telecom_sp,Feedback 8,4,32,22,68.750000
