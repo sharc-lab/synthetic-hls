@@ -13,7 +13,7 @@ conda install -c conda-forge torch-scatter
 SyntheticHLS **requires an HLSFactory version that fully supports OptDSLv2**.  
 Please ensure the installed HLSFactory includes:
 - OptDSLv2 frontend
-- **OptDSLv2 validation logic** (currently available in the `mzhou_OptDSLv2` branch of HLSFactory, not yet merged into the main branch)
+- **OptDSLv2 validation logic** (currently available in the `mzhou_OptDSLv2` branch of HLSFactory, not yet merged into the main branch but this is in progress and should be merged soon)
 
 ### Environment Variables
 
